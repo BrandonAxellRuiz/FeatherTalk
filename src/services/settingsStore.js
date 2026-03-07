@@ -27,8 +27,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   widget: {
     enabled: true,
     position: "top-center",
-    size: "M",
-    animationVariant: "ink-v2"
+    size: "M"
   },
   history: {
     enabled: false,
@@ -68,4 +67,5 @@ export class SettingsStore {
     return this.getAll();
   }
 }
+
 

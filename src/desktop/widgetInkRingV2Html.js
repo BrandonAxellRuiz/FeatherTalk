@@ -73,6 +73,43 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
     const CENTER_Y = 170;
     const ACTIVE_LEVEL = 0.045;
 
+    // Tune these first for style:
+    // talkNoise, talkThick, blobLenMax, blobBodyMaxWidth, tendrilLenMax, blobsPerSecondAtMax
+    const cfg = {
+      radius: 62,
+      points: 260,
+
+      restNoise: 0.95,
+      talkNoise: 10.2,
+
+      restThick: 2.0,
+      talkThick: 4.3,
+
+      strands: 3,
+      strandOffset: 1.0,
+      strandAlpha: 0.92,
+
+      blobsPerSecondAtMax: 7.0,
+      blobSpawnThreshold: 0.08,
+      blobLenMin: 6,
+      blobLenMax: 36,
+      blobBodyMinWidth: 1.2,
+      blobBodyMaxWidth: 7.8,
+      tendrilLenMax: 44,
+      maxActiveBlobs: 28,
+      silenceClearMultiplier: 2.8,
+
+      lockBlobSide: false,
+      lockedBlobAngle: -1.05,
+      blobAngleDrift: 0.42,
+      blobSpread: 0.72,
+
+      brushSize: 96,
+      brushRoughness: 0.52,
+      bleedAlpha: 0.12,
+      loadingNoise: 4.0
+    };
+
     const state = {
       mode: "recording",
       levelRaw: 0,
@@ -81,31 +118,11 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       spinner: 0,
       breath: 0,
       errorPulse: 0,
+      clusterAngle: -1.05,
+      blobAccumulator: 0,
+      blobs: [],
       visible: false,
       lastTs: performance.now()
-    };
-
-    const cfg = {
-      radius: 62,
-      points: 280,
-      restNoise: 1.0,
-      talkNoise: 8.0,
-      restThickness: 2.0,
-      talkThickness: 3.6,
-      strands: 3,
-      strandOffset: 1.05,
-      strandAlpha: 0.92,
-      brushSize: 96,
-      brushRoughness: 0.52,
-      bleedAlpha: 0.12,
-      maxSplashes: 22,
-      splashThreshold: 0.09,
-      splashDotChance: 0.34,
-      splashLenMin: 4,
-      splashLenMax: 27,
-      splashWidthMin: 1.0,
-      splashWidthMax: 3.6,
-      loadingNoise: 4.0
     };
 
     function clamp01(v) {
@@ -227,8 +244,8 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
         Math.cos(theta) * 2.2 + phase * 0.6 + 20,
         Math.sin(theta) * 2.2 + phase * 0.5 + 20
       );
-      const base = lerp(cfg.restThickness, cfg.talkThickness, energy);
-      return Math.max(0.8, base * (1 + n * 0.42));
+      const base = lerp(cfg.restThick, cfg.talkThick, energy);
+      return Math.max(0.9, base * (1 + n * 0.42));
     }
 
     function drawRing(energy, phase) {
@@ -267,66 +284,123 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       }
     }
 
-    function drawSplashes(energy, phase) {
-      if (energy < cfg.splashThreshold) {
-        return;
+    function spawnBlob(energy, phase) {
+      const local = Math.random();
+      const baseAngle = cfg.lockBlobSide
+        ? cfg.lockedBlobAngle
+        : state.clusterAngle + Math.sin(phase * 0.7) * 0.35;
+      const angle = baseAngle + (Math.random() * 2 - 1) * cfg.blobSpread;
+
+      state.blobs.push({
+        angle,
+        local,
+        len: lerp(cfg.blobLenMin, cfg.blobLenMax, energy) * (0.65 + local * 0.55),
+        width: lerp(cfg.blobBodyMinWidth, cfg.blobBodyMaxWidth, energy) * (0.65 + local * 0.45),
+        tendrilLen: lerp(cfg.blobLenMin, cfg.tendrilLenMax, energy) * (0.55 + local * 0.5),
+        ttl: 0.24 + local * 0.28,
+        age: 0
+      });
+
+      if (state.blobs.length > cfg.maxActiveBlobs) {
+        state.blobs.splice(0, state.blobs.length - cfg.maxActiveBlobs);
+      }
+    }
+
+    function drawBlob(blob, phase) {
+      const life = Math.max(0, 1 - blob.age / blob.ttl);
+      if (life <= 0) {
+        return false;
       }
 
-      const count = Math.floor(4 + energy * cfg.maxSplashes);
+      const wob = vnoise2(blob.local * 9 + phase * 1.2, 3.3 + phase * 0.7);
+      const angle = blob.angle + wob * 0.22;
+      const startR = cfg.radius + 3 + blob.local * 5.6;
+      const len = blob.len * (0.6 + 0.4 * life);
 
-      for (let i = 0; i < count; i += 1) {
-        const seed = i * 37.13;
-        const wob = vnoise2(seed * 0.2 + phase * 0.8, 0.8 + phase * 0.5);
-        const angle =
-          i / Math.max(1, count) * Math.PI * 2 +
-          phase * 0.95 +
-          wob * 0.44;
+      const x0 = CENTER_X + Math.cos(angle) * startR;
+      const y0 = CENTER_Y + Math.sin(angle) * startR;
+      const x1 = CENTER_X + Math.cos(angle) * (startR + len);
+      const y1 = CENTER_Y + Math.sin(angle) * (startR + len);
 
-        const local = Math.abs(vnoise2(seed + 10, phase * 0.4 + 50));
-        const startR = cfg.radius + 3 + local * 5.2;
-        const len = lerp(cfg.splashLenMin, cfg.splashLenMax, energy) * (0.72 + local * 0.52);
+      const bodyWidth = Math.max(0.9, blob.width * life);
 
-        const x0 = CENTER_X + Math.cos(angle) * startR;
-        const y0 = CENTER_Y + Math.sin(angle) * startR;
-        const x1 = CENTER_X + Math.cos(angle) * (startR + len);
-        const y1 = CENTER_Y + Math.sin(angle) * (startR + len);
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.lineCap = "round";
+      ctx.lineWidth = bodyWidth;
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
 
-        const width = lerp(cfg.splashWidthMin, cfg.splashWidthMax, energy) * (0.7 + local * 0.5);
+      const tendrilCount = 1 + Math.floor(2 + blob.local * 2);
+      for (let i = 0; i < tendrilCount; i += 1) {
+        const dir = angle + (Math.random() * 2 - 1) * 0.35;
+        const tLen = blob.tendrilLen * (0.35 + Math.random() * 0.45) * life;
+        const tx = x1 + Math.cos(dir) * tLen;
+        const ty = y1 + Math.sin(dir) * tLen;
+
         ctx.beginPath();
-        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.strokeStyle = "rgba(255,255,255,0.8)";
         ctx.lineCap = "round";
-        ctx.lineWidth = width;
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
+        ctx.lineWidth = Math.max(0.5, bodyWidth * 0.34);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(tx, ty);
         ctx.stroke();
+      }
 
-        if (local > 0.58 && energy > 0.2) {
-          const dotR = startR + len + 1 + local * 8;
-          const dx = CENTER_X + Math.cos(angle + wob * 0.2) * dotR;
-          const dy = CENTER_Y + Math.sin(angle + wob * 0.2) * dotR;
-          const dotSize = 0.8 + energy * 2.8 * (0.5 + local * 0.5);
+      if (blob.local > 0.55) {
+        const dotR = startR + len + 2 + blob.local * 5;
+        const dx = CENTER_X + Math.cos(angle + wob * 0.18) * dotR;
+        const dy = CENTER_Y + Math.sin(angle + wob * 0.18) * dotR;
+        const dotSize = 0.8 + life * 2.6 * (0.45 + blob.local * 0.55);
 
-          ctx.beginPath();
-          ctx.fillStyle = "rgba(255,255,255,0.9)";
-          ctx.arc(dx, dy, dotSize, 0, Math.PI * 2);
-          ctx.fill();
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.arc(dx, dy, dotSize, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      return true;
+    }
+
+    function updateAndDrawBlobs(energy, dtSec, phase) {
+      if (energy >= cfg.blobSpawnThreshold) {
+        const spawnRate = cfg.blobsPerSecondAtMax * (0.25 + 0.75 * energy);
+        state.blobAccumulator += spawnRate * dtSec;
+        const spawnCount = Math.floor(state.blobAccumulator);
+
+        if (spawnCount > 0) {
+          state.blobAccumulator -= spawnCount;
+          for (let i = 0; i < spawnCount; i += 1) {
+            spawnBlob(energy, phase);
+          }
+        }
+      }
+
+      for (let i = state.blobs.length - 1; i >= 0; i -= 1) {
+        const blob = state.blobs[i];
+        const clearSpeed = energy < cfg.blobSpawnThreshold ? cfg.silenceClearMultiplier : 1;
+        blob.age += dtSec * clearSpeed;
+
+        if (!drawBlob(blob, phase)) {
+          state.blobs.splice(i, 1);
         }
       }
     }
 
     function drawListening(dt) {
       const target = clamp01(state.levelRaw);
-      const smoothing = target > state.level ? 0.28 : 0.16;
+      const smoothing = target > state.level ? 0.3 : 0.15;
       state.level = lerp(state.level, target, smoothing);
 
       const energy = Math.max(0, Math.min(1, (state.level - ACTIVE_LEVEL) / (1 - ACTIVE_LEVEL)));
-      const idleDrift = 0.00038;
-      const talkDrift = 0.0045;
+      const dtSec = dt / 1000;
 
-      state.phase += dt * (idleDrift + talkDrift * energy);
+      state.phase += dt * (0.00042 + 0.0049 * energy);
+      state.clusterAngle += dtSec * (cfg.blobAngleDrift * (cfg.lockBlobSide ? 0.2 : 1));
 
       drawRing(energy, state.phase);
-      drawSplashes(energy, state.phase);
+      updateAndDrawBlobs(energy, dtSec, state.phase);
     }
 
     function drawLoading(dt) {
@@ -345,7 +419,10 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       for (let i = 0; i <= segments; i += 1) {
         const t = i / segments;
         const a = t * Math.PI * 2;
-        const n = vnoise2(Math.cos(a) * 1.6 + state.spinner * 0.9, Math.sin(a) * 1.6 + state.spinner * 0.7);
+        const n = vnoise2(
+          Math.cos(a) * 1.6 + state.spinner * 0.9,
+          Math.sin(a) * 1.6 + state.spinner * 0.7
+        );
         const r = cfg.radius * pulse + n * turbulence;
         const x = CENTER_X + Math.cos(a) * r;
         const y = CENTER_Y + Math.sin(a) * r;

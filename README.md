@@ -76,7 +76,6 @@ Important keys:
 - `hotkey` (example: `Ctrl+Shift+Space`)
 - `hotkeyFallbacks`
 - `microphoneDeviceId`
-- `widget.animationVariant` (`ink-v2` or `organic-v1`)
 - `audioAllowDshowFallback`
 - `ffmpegPath`
 - `asrWorkerUrl` (default `http://127.0.0.1:8787/transcribe`)
@@ -88,6 +87,28 @@ Important keys:
 - `llamaCppBaseUrl`
 - `llamaModel` (example: `llama3.1:8b`)
 
+
+## Widget Animation Tuning
+
+Widget animation parameters are in:
+
+`src/desktop/widgetInkRingV2Html.js`
+
+Look for the `cfg` object near the top of the inline script.
+
+Most impactful parameters:
+
+- `talkNoise`
+- `talkThick`
+- `blobLenMax`
+- `blobBodyMaxWidth`
+- `tendrilLenMax`
+- `blobsPerSecondAtMax`
+
+If you want splashes on one side, set:
+
+- `lockBlobSide: true`
+- `lockedBlobAngle` to the side you want
 ## Useful Environment Overrides
 
 - `FEATHERTALK_AUDIO_MODE=stub` (demo recorder)
