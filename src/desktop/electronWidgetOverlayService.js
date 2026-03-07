@@ -1,7 +1,13 @@
 import { WIDGET_STATES } from "../services/widgetOverlayService.js";
+import { WIDGET_HTML_INK_V2 } from "./widgetInkRingV2Html.js";
 
 const WIDGET_WIDTH = 260;
 const WIDGET_HEIGHT = 170;
+
+const WIDGET_ANIMATION_VARIANTS = Object.freeze({
+  ORGANIC_V1: "organic-v1",
+  INK_V2: "ink-v2"
+});
 
 const WIDGET_HTML = String.raw`<!doctype html>
 <html>
@@ -295,6 +301,15 @@ const WIDGET_HTML = String.raw`<!doctype html>
 </body>
 </html>`;
 
+function resolveWidgetHtml(animationVariant) {
+  if (animationVariant === WIDGET_ANIMATION_VARIANTS.ORGANIC_V1) {
+    return WIDGET_HTML;
+  }
+
+  return WIDGET_HTML_INK_V2;
+}
+
+
 export class ElectronWidgetOverlayService {
   #window;
   #screen;
@@ -303,7 +318,7 @@ export class ElectronWidgetOverlayService {
   #visible = false;
   #ready;
 
-  constructor({ BrowserWindow, screen }) {
+  constructor({ BrowserWindow, screen, widget = {} }) {
     this.#screen = screen;
     this.#window = new BrowserWindow({
       width: WIDGET_WIDTH,
@@ -326,8 +341,15 @@ export class ElectronWidgetOverlayService {
     this.#window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     this.#window.setIgnoreMouseEvents(true, { forward: true });
 
+    const animationVariant =
+      typeof widget.animationVariant === "string"
+        ? widget.animationVariant
+        : WIDGET_ANIMATION_VARIANTS.INK_V2;
+
+    const widgetHtml = resolveWidgetHtml(animationVariant);
+
     this.#ready = this.#window.loadURL(
-      `data:text/html;charset=UTF-8,${encodeURIComponent(WIDGET_HTML)}`
+      `data:text/html;charset=UTF-8,${encodeURIComponent(widgetHtml)}`
     );
   }
 
@@ -412,3 +434,4 @@ export class ElectronWidgetOverlayService {
     return [...this.#events];
   }
 }
+

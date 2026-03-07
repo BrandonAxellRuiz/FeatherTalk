@@ -76,6 +76,7 @@ Important keys:
 - `hotkey` (example: `Ctrl+Shift+Space`)
 - `hotkeyFallbacks`
 - `microphoneDeviceId`
+- `widget.animationVariant` (`ink-v2` or `organic-v1`)
 - `audioAllowDshowFallback`
 - `ffmpegPath`
 - `asrWorkerUrl` (default `http://127.0.0.1:8787/transcribe`)
@@ -160,3 +161,4 @@ Test-NetConnection 127.0.0.1 -Port 11434
 
 Llama cleanup is mandatory before paste.
 If cleanup fails, FeatherTalk does **not** autopaste raw transcript.
+

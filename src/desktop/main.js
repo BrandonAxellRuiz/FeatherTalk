@@ -148,10 +148,15 @@ async function bootstrap() {
     ollamaCommand: settings.ollamaCommand,
     llamaCppBaseUrl: settings.llamaCppBaseUrl,
     llamaKeepAlive: settings.llamaKeepAlive,
-    llamaNumPredict: settings.llamaNumPredict
+    llamaNumPredict: settings.llamaNumPredict,
+    widgetAnimationVariant: settings.widget?.animationVariant
   });
 
-  const widget = new ElectronWidgetOverlayService({ BrowserWindow, screen });
+  const widget = new ElectronWidgetOverlayService({
+    BrowserWindow,
+    screen,
+    widget: settings.widget
+  });
   const toast = new ElectronToastNotifier({ Notification });
 
   const tray = new ElectronTrayIconService({
@@ -221,3 +226,4 @@ if (hasSingleInstanceLock) {
   console.log("FeatherTalk is already running in the tray. Close the existing instance before starting a new one.");
   app.quit();
 }
+
