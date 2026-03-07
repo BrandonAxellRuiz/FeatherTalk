@@ -3,3 +3,5 @@ data/
 *.log
 npm-debug.log*
 .venv-asr/
+__pycache__/
+*.pyc
