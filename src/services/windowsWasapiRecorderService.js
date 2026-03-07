@@ -294,7 +294,7 @@ function buildMeterArgs({ format, input }) {
     "-ar",
     "16000",
     "-af",
-    "silencedetect=noise=-32dB:d=0.12",
+    "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
     "-f",
     "null",
     "-"
@@ -356,8 +356,8 @@ function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
     stdio: ["pipe", "ignore", "pipe"]
   });
 
-  let isSpeaking = false;
   let stderrBuffer = "";
+  let lastSampleAt = Date.now();
 
   const emitLevel = (value) => {
     try {
@@ -367,14 +367,43 @@ function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
     }
   };
 
-  const setSpeaking = (nextSpeaking) => {
-    if (isSpeaking === nextSpeaking) {
-      return;
+  const dbToLevel = (db) => {
+    if (!Number.isFinite(db)) {
+      return 0;
     }
 
-    isSpeaking = nextSpeaking;
-    emitLevel(nextSpeaking ? 0.72 : 0);
+    if (db <= -45) {
+      return 0;
+    }
+
+    if (db >= -18) {
+      return 1;
+    }
+
+    return (db + 45) / 27;
   };
+
+  const parseDbValue = (line) => {
+    const metadata = line.match(/lavfi\.astats\.Overall\.RMS_level=\s*([-+]?\d+(?:\.\d+)?|-?inf)/i);
+    if (metadata) {
+      const value = Number(metadata[1]);
+      return Number.isFinite(value) ? value : -120;
+    }
+
+    const summary = line.match(/RMS level dB:\s*([-+]?\d+(?:\.\d+)?|-?inf)/i);
+    if (summary) {
+      const value = Number(summary[1]);
+      return Number.isFinite(value) ? value : -120;
+    }
+
+    return null;
+  };
+
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastSampleAt > 350) {
+      emitLevel(0);
+    }
+  }, 140);
 
   proc.stderr.on("data", (chunk) => {
     stderrBuffer += String(chunk);
@@ -382,14 +411,13 @@ function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
     stderrBuffer = lines.pop() ?? "";
 
     for (const line of lines) {
-      if (/silence_end\s*:/i.test(line)) {
-        setSpeaking(true);
+      const db = parseDbValue(line);
+      if (db === null) {
         continue;
       }
 
-      if (/silence_start\s*:/i.test(line)) {
-        setSpeaking(false);
-      }
+      lastSampleAt = Date.now();
+      emitLevel(dbToLevel(db));
     }
   });
 
@@ -398,6 +426,7 @@ function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
   });
 
   proc.on("exit", () => {
+    clearInterval(watchdog);
     emitLevel(0);
   });
 
@@ -641,5 +670,6 @@ export class WindowsWasapiRecorderService {
 }
 
 export { buildInputCandidates };
+
 
 
