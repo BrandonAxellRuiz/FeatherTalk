@@ -1,0 +1,22 @@
+﻿{
+    "name":  "feathertalk",
+    "version":  "0.2.0",
+    "description":  "Windows-first local dictation app scaffold: Record -\u003e Parakeet -\u003e Llama -\u003e Paste.",
+    "type":  "module",
+    "private":  true,
+    "scripts":  {
+                    "start":  "npm.cmd run start:demo",
+                    "start:demo":  "node src/index.js",
+                    "start:desktop":  "electron src/desktop/main.js",
+                    "start:asr-worker":  ".\\.venv-asr\\Scripts\\python.exe scripts/parakeet-asr-worker.py",
+                    "diagnose:mic":  "node scripts/diagnose-mic.js",
+                    "test":  "node scripts/run-tests.js",
+                    "start:all":  "powershell -ExecutionPolicy Bypass -File scripts/start-all.ps1"
+                },
+    "engines":  {
+                    "node":  "\u003e=20"
+                },
+    "devDependencies":  {
+                            "electron":  "^37.0.0"
+                        }
+}
