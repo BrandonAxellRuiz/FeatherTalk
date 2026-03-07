@@ -91,6 +91,9 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
 
       blobsPerSecondAtMax: 7.0,
       blobSpawnThreshold: 0.08,
+      blobGateOpen: 0.13,
+      blobGateClose: 0.055,
+      blobSilenceHoldMs: 110,
       blobLenMin: 6,
       blobLenMax: 36,
       blobBodyMinWidth: 1.2,
@@ -121,6 +124,8 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       clusterAngle: -1.05,
       blobAccumulator: 0,
       blobs: [],
+      blobGateActive: false,
+      blobSilenceMs: 0,
       visible: false,
       lastTs: performance.now()
     };
@@ -403,11 +408,27 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       const rawEnergy = Math.max(0, Math.min(1, (state.levelRaw - ACTIVE_LEVEL) / (1 - ACTIVE_LEVEL)));
       const dtSec = dt / 1000;
 
+      if (rawEnergy >= cfg.blobGateOpen) {
+        state.blobGateActive = true;
+        state.blobSilenceMs = 0;
+      } else if (rawEnergy <= cfg.blobGateClose) {
+        state.blobSilenceMs += dt;
+        if (state.blobSilenceMs >= cfg.blobSilenceHoldMs) {
+          state.blobGateActive = false;
+        }
+      } else {
+        state.blobSilenceMs = 0;
+      }
+
+      const blobEnergy = state.blobGateActive
+        ? Math.max(0, Math.min(1, (rawEnergy - cfg.blobGateClose) / (1 - cfg.blobGateClose)))
+        : 0;
+
       state.phase += dt * (0.00042 + 0.0049 * energy);
       state.clusterAngle += dtSec * (cfg.blobAngleDrift * (cfg.lockBlobSide ? 0.2 : 1));
 
       drawRing(energy, state.phase);
-      updateAndDrawBlobs(rawEnergy, dtSec, state.phase);
+      updateAndDrawBlobs(blobEnergy, dtSec, state.phase);
     }
 
     function drawLoading(dt) {
@@ -519,4 +540,5 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
   </script>
 </body>
 </html>`;
+
 

@@ -72,8 +72,33 @@ async function setClipboardText(text) {
 }
 
 async function sendCtrlV() {
-  const script = "$shell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 45; $shell.SendKeys('^v')";
+  const script = "$shell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 20; $shell.SendKeys('^v')";
   await runPowerShell(script, 3000);
+}
+
+async function pasteWithClipboardRestore(text) {
+  const base64 = Buffer.from(text, "utf8").toString("base64");
+  const script = `
+$ErrorActionPreference = 'Stop'
+$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${base64}'))
+$prev = $null
+$hasPrev = $false
+try {
+  $prev = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+  if ($null -ne $prev) { $hasPrev = $true }
+} catch {}
+Set-Clipboard -Value $text
+$shell = New-Object -ComObject WScript.Shell
+Start-Sleep -Milliseconds 20
+$shell.SendKeys('^v')
+Start-Sleep -Milliseconds 40
+if ($hasPrev) {
+  Set-Clipboard -Value $prev
+}
+Write-Output 'ok'
+`;
+
+  await runPowerShell(script, 3200);
 }
 
 export class WindowsPasteController {
@@ -89,6 +114,13 @@ export class WindowsPasteController {
       return { pasted: true, copied_to_clipboard: false };
     }
 
+    try {
+      await pasteWithClipboardRestore(text);
+      return { pasted: true, copied_to_clipboard: false };
+    } catch {
+      // fallback path
+    }
+
     let previous = "";
     try {
       previous = await getClipboardText();
@@ -102,7 +134,7 @@ export class WindowsPasteController {
 
       if (typeof previous === "string") {
         await setClipboardText(previous).catch(() => {
-          // Non-fatal.
+          // non-fatal
         });
       }
 
