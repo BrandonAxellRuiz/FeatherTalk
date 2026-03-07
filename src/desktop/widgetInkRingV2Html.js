@@ -364,23 +364,29 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
     }
 
     function updateAndDrawBlobs(energy, dtSec, phase) {
-      if (energy >= cfg.blobSpawnThreshold) {
-        const spawnRate = cfg.blobsPerSecondAtMax * (0.25 + 0.75 * energy);
-        state.blobAccumulator += spawnRate * dtSec;
-        const spawnCount = Math.floor(state.blobAccumulator);
+      if (energy < cfg.blobSpawnThreshold) {
+        // Silence path: drop blobs immediately so only the subtle ring remains.
+        state.blobAccumulator = 0;
+        if (state.blobs.length > 0) {
+          state.blobs.length = 0;
+        }
+        return;
+      }
 
-        if (spawnCount > 0) {
-          state.blobAccumulator -= spawnCount;
-          for (let i = 0; i < spawnCount; i += 1) {
-            spawnBlob(energy, phase);
-          }
+      const spawnRate = cfg.blobsPerSecondAtMax * (0.25 + 0.75 * energy);
+      state.blobAccumulator += spawnRate * dtSec;
+      const spawnCount = Math.floor(state.blobAccumulator);
+
+      if (spawnCount > 0) {
+        state.blobAccumulator -= spawnCount;
+        for (let i = 0; i < spawnCount; i += 1) {
+          spawnBlob(energy, phase);
         }
       }
 
       for (let i = state.blobs.length - 1; i >= 0; i -= 1) {
         const blob = state.blobs[i];
-        const clearSpeed = energy < cfg.blobSpawnThreshold ? cfg.silenceClearMultiplier : 1;
-        blob.age += dtSec * clearSpeed;
+        blob.age += dtSec;
 
         if (!drawBlob(blob, phase)) {
           state.blobs.splice(i, 1);
@@ -394,13 +400,14 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       state.level = lerp(state.level, target, smoothing);
 
       const energy = Math.max(0, Math.min(1, (state.level - ACTIVE_LEVEL) / (1 - ACTIVE_LEVEL)));
+      const rawEnergy = Math.max(0, Math.min(1, (state.levelRaw - ACTIVE_LEVEL) / (1 - ACTIVE_LEVEL)));
       const dtSec = dt / 1000;
 
       state.phase += dt * (0.00042 + 0.0049 * energy);
       state.clusterAngle += dtSec * (cfg.blobAngleDrift * (cfg.lockBlobSide ? 0.2 : 1));
 
       drawRing(energy, state.phase);
-      updateAndDrawBlobs(energy, dtSec, state.phase);
+      updateAndDrawBlobs(rawEnergy, dtSec, state.phase);
     }
 
     function drawLoading(dt) {
@@ -512,3 +519,4 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
   </script>
 </body>
 </html>`;
+
