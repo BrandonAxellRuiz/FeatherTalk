@@ -1,39 +1,49 @@
 # FeatherTalk
 
-FeatherTalk is a Windows-first, local dictation app that turns speech into cleaned text with a single hotkey.
+![Portada FeatherTalk](./FeatherTalk.png)
 
-Core pipeline (always local):
+FeatherTalk es una app local, gratis, ligera y segura de transcripción/dictado impulsada con AI. Con una sola tecla trae tus ideas con tu voz a texto limpio, bien redactado y sin errores. 
 
-`Record -> NVIDIA Parakeet ASR -> Llama cleanup (mandatory) -> Paste`
+Narramos muchísimo más rapido de lo que escribimos y en esta época de AI, es cuando más lo necesitamos.
 
-## What It Does
+## Redes y Apoyo
 
-- Global hotkey toggles recording on/off.
-- Shows a floating widget while recording/processing.
-- Transcribes speech with local Parakeet ASR.
-- Always runs Llama cleanup before pasting.
-- Pastes final text into the active app (Chrome, VS Code, Slack, Notion, Word, etc.).
+Instagram: **@buildwithber**
 
-## Privacy Model
+Si este proyecto te aporta valor, de verdad me ayudaria mucho que me sigas y estes pendiente de los proximos proyectos que voy a estar compartiendo. Gracias por el apoyo! <3
 
-- 100% local processing after setup.
-- No cloud API is required for transcription or cleanup.
-- Audio and text stay on your machine.
+Pipeline principal (siempre local):
 
-## Current MVP Status
+`Grabar -> NVIDIA Parakeet ASR -> Limpieza con Llama (obligatoria) -> Pegar`
 
-Implemented:
+## Que Hace
 
-- UX state machine (`IDLE`, `RECORDING`, `PROCESSING_ASR`, `PROCESSING_LLAMA`, `PASTING`, `DONE`, `ERROR`)
-- Mandatory Llama cleanup rule (no autopaste when cleanup fails)
-- Desktop Electron runtime with tray icon + global hotkey fallback
-- Floating overlay widget with recording/processing/error states
-- Windows audio capture via `ffmpeg` (WASAPI with DSHOW fallback)
-- Clipboard-safe paste flow with fallback copy mode
-- Local ASR fallback via Windows Speech when ASR endpoint is unavailable
-- Structured logs to console and `app.log`
+- Una hotkey global inicia/detiene la grabacion.
+- Muestra un widget flotante mientras graba/procesa.
+- Transcribe voz con Parakeet ASR local.
+- Siempre ejecuta limpieza con Llama antes de pegar.
+- Pega el texto final en la app activa (Chrome, VS Code, Slack, Notion, Word, etc.).
 
-## Project Scripts
+## Modelo de Privacidad
+
+- Procesamiento 100% local despues de la configuracion.
+- No se requiere API en la nube para transcripcion ni limpieza.
+- El audio y el texto se quedan en tu maquina.
+
+## Estado Actual del MVP
+
+Implementado:
+
+- Maquina de estados UX (`IDLE`, `RECORDING`, `PROCESSING_ASR`, `PROCESSING_LLAMA`, `PASTING`, `DONE`, `ERROR`)
+- Regla obligatoria de limpieza con Llama (no hay autopaste si falla la limpieza)
+- Runtime de Electron de escritorio con bandeja + fallback de hotkey global
+- Widget flotante con estados de grabacion/procesamiento/error
+- Captura de audio en Windows via `ffmpeg` (WASAPI con fallback DSHOW)
+- Flujo de pegado seguro para portapapeles con modo copia de respaldo
+- Fallback ASR local con Windows Speech cuando el endpoint ASR no esta disponible
+- Logs estructurados en consola y en `app.log`
+
+## Scripts del Proyecto
 
 ```powershell
 npm.cmd install
@@ -44,36 +54,36 @@ npm.cmd run start:asr-worker
 npm.cmd run diagnose:mic
 ```
 
-## Recommended Way To Run
+## Forma Recomendada de Ejecutar
 
-Use one command to start required local services and desktop app:
+Usa un solo comando para iniciar servicios locales requeridos y app de escritorio:
 
 ```powershell
 npm.cmd run start:all
 ```
 
-This script:
+Este script:
 
-- Resolves and exports `ffmpeg` path
-- Starts/validates Ollama
-- Warms up Llama model
-- Starts/validates Parakeet ASR worker
-- Stops stale FeatherTalk Electron instance
-- Launches desktop app
+- Resuelve y exporta la ruta de `ffmpeg`
+- Inicia/valida Ollama
+- Calienta el modelo Llama
+- Inicia/valida el worker ASR Parakeet
+- Detiene instancia Electron vieja de FeatherTalk
+- Lanza la app de escritorio
 
-## Local Configuration
+## Configuracion Local
 
-Settings file location:
+Ubicacion del archivo de settings:
 
 `%LOCALAPPDATA%\FeatherTalk\config\settings.json`
 
-Fallback location (if `%LOCALAPPDATA%` is unavailable):
+Ubicacion de respaldo (si `%LOCALAPPDATA%` no esta disponible):
 
 `<repo>\data\localappdata\FeatherTalk\config\settings.json`
 
-Important keys:
+Claves importantes:
 
-- `hotkey` (example: `Ctrl+Shift+Space`)
+- `hotkey` (ejemplo: `Ctrl+Shift+Space`)
 - `hotkeyFallbacks`
 - `microphoneDeviceId`
 - `audioAllowDshowFallback`
@@ -81,37 +91,37 @@ Important keys:
 - `asrWorkerUrl` (default `http://127.0.0.1:8787/transcribe`)
 - `asrAllowWindowsSpeechFallback`
 - `language` (`auto`, `es`, `en`)
-- `llamaBackend` (`ollama` or `llama.cpp`)
+- `llamaBackend` (`ollama` o `llama.cpp`)
 - `ollamaBaseUrl` (default `http://127.0.0.1:11434`)
-- `ollamaCommand` (absolute path to `ollama.exe` recommended)
+- `ollamaCommand` (se recomienda ruta absoluta a `ollama.exe`)
 - `llamaCppBaseUrl`
-- `llamaModel` (example: `llama3.1:8b`)
+- `llamaModel` (ejemplo: `llama3.1:8b`)
+- `llamaNumPredict` (si quieres evitar recortes en textos largos, usa `-1` para ilimitado)
 
+## Ajuste de Animacion del Widget
 
-## Widget Animation Tuning
-
-Widget animation parameters are in:
+Los parametros de animacion estan en:
 
 `src/desktop/widgetInkRingV2Html.js`
 
-Look for the `cfg` object near the top of the inline script.
+Busca el objeto `cfg` cerca del inicio del script inline.
 
-Most impactful parameters:
+Parametros mas influyentes:
 
 - `talkNoise`
 - `talkThick`
 - `blobLenMax`
 - `blobBodyMaxWidth`
-- `tendrilLenMax`
 - `blobsPerSecondAtMax`
 
-If you want splashes on one side, set:
+Si quieres salpicaduras de un solo lado, configura:
 
 - `lockBlobSide: true`
-- `lockedBlobAngle` to the side you want
-## Useful Environment Overrides
+- `lockedBlobAngle` hacia el lado que prefieras
 
-- `FEATHERTALK_AUDIO_MODE=stub` (demo recorder)
+## Overrides de Entorno Utiles
+
+- `FEATHERTALK_AUDIO_MODE=stub` (grabador demo)
 - `FEATHERTALK_ASR_URL`
 - `FEATHERTALK_OLLAMA_URL`
 - `FEATHERTALK_OLLAMA_COMMAND`
@@ -120,11 +130,11 @@ If you want splashes on one side, set:
 
 ## Logs
 
-Log file:
+Archivo de log:
 
 `%LOCALAPPDATA%\FeatherTalk\logs\app.log`
 
-Follow logs live:
+Seguir logs en vivo:
 
 ```powershell
 Get-Content "$env:LOCALAPPDATA\FeatherTalk\logs\app.log" -Wait
@@ -132,54 +142,59 @@ Get-Content "$env:LOCALAPPDATA\FeatherTalk\logs\app.log" -Wait
 
 ## Troubleshooting
 
-### Microphone fails to start
+### El microfono no inicia
 
-Run:
+Ejecuta:
 
 ```powershell
 npm.cmd run diagnose:mic
 ```
 
-Then verify:
+Luego verifica:
 
-- `ffmpeg` exists and is executable
-- Your build supports required capture mode (WASAPI/DSHOW)
-- `microphoneDeviceId` matches a real DSHOW device when needed
+- `ffmpeg` existe y es ejecutable
+- Tu build soporta el modo de captura requerido (WASAPI/DSHOW)
+- `microphoneDeviceId` coincide con un dispositivo real DSHOW cuando aplica
 
-### ASR request failed (`fetch failed`)
+### Falla request ASR (`fetch failed`)
 
-- Confirm ASR worker is running on `127.0.0.1:8787`
-- Check connectivity:
+- Confirma que el worker ASR este corriendo en `127.0.0.1:8787`
+- Verifica conectividad:
 
 ```powershell
 Test-NetConnection 127.0.0.1 -Port 8787
 ```
 
-### Llama cleanup failed
+### Falla limpieza con Llama
 
-- Ensure Ollama is installed and running
-- Pull model:
+- Asegurate de que Ollama este instalado y corriendo
+- Descarga el modelo:
 
 ```powershell
 ollama pull llama3.1:8b
 ```
 
-- Check Ollama port:
+- Verifica puerto de Ollama:
 
 ```powershell
 Test-NetConnection 127.0.0.1 -Port 11434
 ```
 
-## Architecture Summary
+## Resumen de Arquitectura
 
-- `src/desktop/*`: Electron desktop runtime (hotkey, tray, overlay)
-- `src/controllers/*`: orchestration and UX flow
-- `src/core/*`: FSM and pipeline rules
-- `src/services/*`: ASR, cleanup, audio capture, paste, settings, logging
-- `scripts/*`: startup/diagnostics/ASR worker helpers
+- `src/desktop/*`: runtime de escritorio Electron (hotkey, tray, overlay)
+- `src/controllers/*`: orquestacion y flujo UX
+- `src/core/*`: FSM y reglas del pipeline
+- `src/services/*`: ASR, limpieza, captura de audio, pegado, settings, logging
+- `scripts/*`: helpers de inicio/diagnostico/worker ASR
 
-## Product Rule (Non-Negotiable)
+## Regla del Producto (No Negociable)
 
-Llama cleanup is mandatory before paste.
-If cleanup fails, FeatherTalk does **not** autopaste raw transcript.
+La limpieza con Llama es obligatoria antes de pegar.
+Si falla la limpieza, FeatherTalk **no** pega automaticamente la transcripcion cruda.
 
+## Redes y Apoyo
+
+Instagram: **@buildwithber**
+
+Si este proyecto te aporta valor, de verdad me ayudaria mucho que me sigas y estes pendiente de los proximos proyectos que voy a estar compartiendo. Gracias por el apoyo! <3

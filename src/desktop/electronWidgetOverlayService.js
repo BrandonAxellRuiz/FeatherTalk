@@ -2,7 +2,7 @@ import { WIDGET_STATES } from "../services/widgetOverlayService.js";
 import { WIDGET_HTML_INK_V2 } from "./widgetInkRingV2Html.js";
 
 const WIDGET_WIDTH = 260;
-const WIDGET_HEIGHT = 170;
+const WIDGET_HEIGHT = 260;
 
 export class ElectronWidgetOverlayService {
   #window;

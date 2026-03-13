@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { AudioCaptureError } from "../core/errors.js";
 import { resolveRecordingsDirCandidates } from "./appPaths.js";
 
-const MIN_ACTIVE_LEVEL = 0.02;
+const MIN_ACTIVE_LEVEL = 0.005;
 const ATTACK_SMOOTHING = 0.6;
 const RELEASE_SMOOTHING = 0.25;
 
@@ -284,7 +284,7 @@ function buildMeterArgs({ format, input }) {
     "-hide_banner",
     "-nostats",
     "-loglevel",
-    "info",
+    "error",
     "-f",
     format,
     "-i",
@@ -293,10 +293,8 @@ function buildMeterArgs({ format, input }) {
     "1",
     "-ar",
     "16000",
-    "-af",
-    "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
     "-f",
-    "null",
+    "wav",
     "-"
   ];
 }
@@ -345,7 +343,7 @@ async function spawnCapture(ffmpegPath, candidate, outputPath) {
   return proc;
 }
 
-function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
+function spawnLevelMeter(ffmpegPath, candidate, onLevel, logger = null) {
   const args = buildMeterArgs({
     format: candidate.format,
     input: candidate.input
@@ -353,11 +351,24 @@ function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
 
   const proc = spawn(ffmpegPath, args, {
     windowsHide: true,
-    stdio: ["pipe", "ignore", "pipe"]
+    stdio: ["pipe", "pipe", "pipe"]
   });
 
-  let stderrBuffer = "";
+  const bytesPerSample = 2;
+  const sampleRate = 16000;
+  const sampleWindowMs = 60;
+  const samplesPerWindow = Math.max(
+    128,
+    Math.floor((sampleRate * sampleWindowMs) / 1000)
+  );
+  const bytesPerWindow = samplesPerWindow * bytesPerSample;
+
+  let meterBuffer = Buffer.alloc(0);
+  let wavHeaderBuffer = Buffer.alloc(0);
+  let awaitingWavHeader = true;
+  let gotSample = false;
   let lastSampleAt = Date.now();
+  let noiseFloor = 0.003;
 
   const emitLevel = (value) => {
     try {
@@ -367,36 +378,88 @@ function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
     }
   };
 
-  const dbToLevel = (db) => {
-    if (!Number.isFinite(db)) {
+  const rmsToLevel = (rms, floor) => {
+    if (!Number.isFinite(rms) || rms <= 0) {
       return 0;
     }
 
-    if (db <= -45) {
+    const headroom = rms - floor;
+    if (headroom <= 0.0008) {
       return 0;
     }
 
-    if (db >= -18) {
-      return 1;
-    }
-
-    return (db + 45) / 27;
+    // High-gain mapping because some ffmpeg/device combos deliver very low amplitudes.
+    return Math.pow(Math.min(1, headroom * 110), 0.7);
   };
 
-  const parseDbValue = (line) => {
-    const metadata = line.match(/lavfi\.astats\.Overall\.RMS_level=\s*([-+]?\d+(?:\.\d+)?|-?inf)/i);
-    if (metadata) {
-      const value = Number(metadata[1]);
-      return Number.isFinite(value) ? value : -120;
+  const emitFromPcm = (buffer) => {
+    const samples = Math.floor(buffer.length / bytesPerSample);
+    if (samples <= 0) {
+      return;
     }
 
-    const summary = line.match(/RMS level dB:\s*([-+]?\d+(?:\.\d+)?|-?inf)/i);
-    if (summary) {
-      const value = Number(summary[1]);
-      return Number.isFinite(value) ? value : -120;
+    let sumSquares = 0;
+    for (let offset = 0; offset + 1 < buffer.length; offset += bytesPerSample) {
+      const sample = buffer.readInt16LE(offset) / 32768;
+      sumSquares += sample * sample;
     }
 
-    return null;
+    const rms = Math.sqrt(sumSquares / samples);
+    const floorLerp = rms < noiseFloor ? 0.1 : 0.004;
+    noiseFloor += (rms - noiseFloor) * floorLerp;
+
+    if (noiseFloor < 0.0006) {
+      noiseFloor = 0.0006;
+    } else if (noiseFloor > 0.05) {
+      noiseFloor = 0.05;
+    }
+
+    gotSample = true;
+    lastSampleAt = Date.now();
+    emitLevel(rmsToLevel(rms, noiseFloor));
+  };
+
+  const feedAudioBytes = (chunk) => {
+    meterBuffer =
+      meterBuffer.length === 0
+        ? Buffer.from(chunk)
+        : Buffer.concat([meterBuffer, chunk]);
+
+    while (meterBuffer.length >= bytesPerWindow) {
+      emitFromPcm(meterBuffer.subarray(0, bytesPerWindow));
+      meterBuffer = meterBuffer.subarray(bytesPerWindow);
+    }
+  };
+
+  const tryConsumeWavHeader = (chunk) => {
+    wavHeaderBuffer =
+      wavHeaderBuffer.length === 0
+        ? Buffer.from(chunk)
+        : Buffer.concat([wavHeaderBuffer, chunk]);
+
+    if (wavHeaderBuffer.length < 44) {
+      return;
+    }
+
+    let dataStart = 44;
+    const dataIndex = wavHeaderBuffer.indexOf(Buffer.from("data"));
+    if (dataIndex >= 0 && wavHeaderBuffer.length >= dataIndex + 8) {
+      dataStart = dataIndex + 8;
+    }
+
+    const riff = wavHeaderBuffer.toString("ascii", 0, 4);
+    const wave = wavHeaderBuffer.toString("ascii", 8, 12);
+    if (riff !== "RIFF" || wave !== "WAVE") {
+      // Fallback: treat output as raw PCM if header is not standard WAV.
+      dataStart = 0;
+    }
+
+    awaitingWavHeader = false;
+    const payload = wavHeaderBuffer.subarray(dataStart);
+    wavHeaderBuffer = Buffer.alloc(0);
+    if (payload.length > 0) {
+      feedAudioBytes(payload);
+    }
   };
 
   const watchdog = setInterval(() => {
@@ -405,29 +468,52 @@ function spawnLevelMeter(ffmpegPath, candidate, onLevel) {
     }
   }, 140);
 
-  proc.stderr.on("data", (chunk) => {
-    stderrBuffer += String(chunk);
-    const lines = stderrBuffer.split(/\r?\n/);
-    stderrBuffer = lines.pop() ?? "";
+  proc.stdout.on("data", (chunk) => {
+    if (awaitingWavHeader) {
+      tryConsumeWavHeader(chunk);
+      return;
+    }
 
-    for (const line of lines) {
-      const db = parseDbValue(line);
-      if (db === null) {
-        continue;
-      }
+    feedAudioBytes(chunk);
+  });
 
-      lastSampleAt = Date.now();
-      emitLevel(dbToLevel(db));
+  proc.stdout.on("error", (error) => {
+    if (logger) {
+      logger.warn("Audio level meter stdout error", {
+        error: error?.message ?? String(error)
+      });
     }
   });
 
-  proc.stderr.on("error", () => {
-    // Non-fatal for metering process.
+  proc.stderr.on("data", (chunk) => {
+    const text = String(chunk ?? "").trim();
+    if (!text || !logger) {
+      return;
+    }
+
+    logger.warn("Audio level meter stderr", { text });
   });
 
-  proc.on("exit", () => {
+  proc.stderr.on("error", (error) => {
+    if (logger) {
+      logger.warn("Audio level meter stderr stream error", {
+        error: error?.message ?? String(error)
+      });
+    }
+  });
+
+  proc.on("exit", (code) => {
     clearInterval(watchdog);
     emitLevel(0);
+
+    if (logger) {
+      logger.debug("Audio level meter exited", {
+        code,
+        gotSample,
+        input: candidate.input,
+        format: candidate.format
+      });
+    }
   });
 
   return proc;
@@ -514,15 +600,18 @@ export class WindowsWasapiRecorderService {
   #activeInputLabel = null;
   #smoothedLevel = 0;
   #capability = null;
+  #logger = null;
 
   constructor({
     ffmpegPath = "ffmpeg",
     microphoneDeviceId = "default",
-    allowDshowFallback = true
+    allowDshowFallback = true,
+    logger = null
   } = {}) {
     this.#ffmpegPath = ffmpegPath;
     this.#deviceId = microphoneDeviceId;
     this.#allowDshowFallback = allowDshowFallback;
+    this.#logger = logger;
   }
 
   async #getCapability() {
@@ -586,9 +675,23 @@ export class WindowsWasapiRecorderService {
           try {
             meterProc = spawnLevelMeter(this.#ffmpegPath, candidate, (level) => {
               this.#emitLevelSample(level);
-            });
-          } catch {
+            }, this.#logger);
+
+            if (this.#logger) {
+              this.#logger.debug("Audio level meter started", {
+                input: candidate.input,
+                format: candidate.format
+              });
+            }
+          } catch (error) {
             meterProc = null;
+            if (this.#logger) {
+              this.#logger.warn("Audio level meter failed to start", {
+                input: candidate.input,
+                format: candidate.format,
+                error: error?.message ?? String(error)
+              });
+            }
           }
         }
 
@@ -670,6 +773,3 @@ export class WindowsWasapiRecorderService {
 }
 
 export { buildInputCandidates };
-
-
-

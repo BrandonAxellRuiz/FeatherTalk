@@ -241,6 +241,55 @@ addTest("ASR client retries language hints when auto transcript is empty", async
     await fixture.cleanup();
   }
 });
+addTest("ASR client prefers Spanish hint when auto looks English-biased", async () => {
+  const fixture = await createTinyWavFixture();
+
+  try {
+    const client = new AsrWorkerClient({
+      endpoint: "http://127.0.0.1:8787/transcribe",
+      fetchImpl: async (_url, options) => {
+        const body = JSON.parse(options.body);
+
+        if (body.language === "auto") {
+          return {
+            ok: true,
+            async json() {
+              return {
+                raw_text:
+                  "what happens is that when I start speaking en espanol the model mixes words"
+              };
+            }
+          };
+        }
+
+        if (body.language === "es") {
+          return {
+            ok: true,
+            async json() {
+              return {
+                raw_text:
+                  "lo que pasa es que cuando empiezo a hablar en espanol el modelo mezcla palabras"
+              };
+            }
+          };
+        }
+
+        throw new Error("unexpected language");
+      },
+      retries: 0
+    });
+
+    const result = await client.transcribe({
+      audioPath: fixture.filePath,
+      language: "auto"
+    });
+
+    assert.equal(result.language_used, "es");
+    assert.match(result.raw_text, /cuando empiezo a hablar en espanol/i);
+  } finally {
+    await fixture.cleanup();
+  }
+});
 addTest("Llama client handles missing ollama command", async () => {
   const { LlamaCleanupClient } = await import("../src/services/llamaCleanupClient.js");
 
@@ -307,6 +356,28 @@ addTest("Llama client retries after auto-start attempt", async () => {
   assert.equal(output, "texto crudo");
   assert.equal(fetchCount, 2);
   assert.equal(proc.unrefCalled, true);
+});
+addTest("Llama client strips leaked reasoning text from cleanup output", async () => {
+  const { LlamaCleanupClient } = await import("../src/services/llamaCleanupClient.js");
+
+  const client = new LlamaCleanupClient({
+    cleaner: async () =>
+      [
+        "Hola, esto es una prueba para ver que tal se escucha.",
+        "",
+        'Removed filler words: "", "I tr I"',
+        "",
+        "I removed the following:",
+        '* ""',
+        '* ""'
+      ].join("\n")
+  });
+
+  const output = await client.cleanText({
+    rawText: "Hola, esto es una prueba para ver que tal se escucha"
+  });
+
+  assert.equal(output, "Hola, esto es una prueba para ver que tal se escucha.");
 });
 addTest("FSM happy-path transitions", () => {
   const transitions = [];

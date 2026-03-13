@@ -68,6 +68,142 @@ function buildLanguageCandidates(language) {
   return [normalized];
 }
 
+const ENGLISH_STOPWORDS = new Set([
+  "the",
+  "and",
+  "is",
+  "are",
+  "to",
+  "of",
+  "for",
+  "in",
+  "with",
+  "that",
+  "this",
+  "you",
+  "we",
+  "it",
+  "on",
+  "at",
+  "be",
+  "have",
+  "not",
+  "do",
+  "from"
+]);
+
+const SPANISH_STOPWORDS = new Set([
+  "el",
+  "la",
+  "los",
+  "las",
+  "un",
+  "una",
+  "de",
+  "del",
+  "y",
+  "que",
+  "en",
+  "con",
+  "para",
+  "por",
+  "como",
+  "es",
+  "son",
+  "se",
+  "no",
+  "lo",
+  "le"
+]);
+
+function toLanguageTokens(text) {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function scoreLanguageSignals(text) {
+  const tokens = toLanguageTokens(text);
+  let english = 0;
+  let spanish = 0;
+
+  for (const token of tokens) {
+    if (ENGLISH_STOPWORDS.has(token)) {
+      english += 1;
+    }
+
+    if (SPANISH_STOPWORDS.has(token)) {
+      spanish += 1;
+    }
+  }
+
+  if (/[\u00E1\u00E9\u00ED\u00F3\u00FA\u00F1\u00BF\u00A1]/i.test(String(text ?? ""))) {
+    spanish += 2;
+  }
+
+  return { english, spanish, tokenCount: tokens.length };
+}
+
+function shouldProbeSpanishFromAuto(autoText) {
+  const signals = scoreLanguageSignals(autoText);
+
+  // Probe Spanish broadly in auto mode unless the auto transcript already
+  // has clear Spanish evidence. This avoids English-biased auto outputs.
+  if (signals.spanish >= 2) {
+    return false;
+  }
+
+  return true;
+}
+
+function chooseBetweenAutoAndSpanish(autoResponse, spanishResponse) {
+  const autoSignals = scoreLanguageSignals(autoResponse.raw_text);
+  const spanishSignals = scoreLanguageSignals(spanishResponse.raw_text);
+
+  const autoTokenCount = toLanguageTokens(autoResponse.raw_text).length;
+  const spanishTokenCount = toLanguageTokens(spanishResponse.raw_text).length;
+
+  if (spanishTokenCount === 0) {
+    return { chosen: "auto", response: autoResponse };
+  }
+
+  const autoEnglishDominant = autoSignals.english >= autoSignals.spanish + 1;
+  const spanishEnglishDominant =
+    spanishSignals.english >= spanishSignals.spanish + 2;
+  const spanishLooksMoreSpanish =
+    spanishSignals.spanish > autoSignals.spanish ||
+    spanishSignals.english < autoSignals.english ||
+    spanishSignals.spanish >= 2;
+
+  const spanishTooShortComparedToAuto =
+    autoTokenCount >= 4 && spanishTokenCount < Math.floor(autoTokenCount * 0.4);
+
+  const spanishClearlyBetterForSpanishSpeech =
+    !spanishTooShortComparedToAuto &&
+    autoEnglishDominant &&
+    spanishLooksMoreSpanish &&
+    !spanishEnglishDominant;
+
+  if (spanishClearlyBetterForSpanishSpeech) {
+    return { chosen: "es", response: spanishResponse };
+  }
+
+  // Keep auto only when both outputs look clearly English-dominant,
+  // or when the Spanish-hint output is suspiciously short.
+  if (
+    (autoEnglishDominant && spanishEnglishDominant) ||
+    spanishTooShortComparedToAuto
+  ) {
+    return { chosen: "auto", response: autoResponse };
+  }
+
+  // Bias toward the Spanish-hint result for bilingual dictation to avoid
+  // English translation drift when speaking Spanish.
+  return { chosen: "es", response: spanishResponse };
+}
+
 function buildAsrHint(endpoint) {
   return `Start ASR worker and verify ${endpoint}.`;
 }
@@ -289,6 +425,9 @@ export class AsrWorkerClient {
       const failures = [];
       const failureErrors = [];
       const languageCandidates = buildLanguageCandidates(request.language);
+      const isAutoLanguageRequest =
+        `${request.language ?? "auto"}`.trim().toLowerCase() === "auto";
+      let deferredAutoResponse = null;
 
       this.#logger.info("ASR request start", {
         endpoint: this.#endpoint,
@@ -315,6 +454,38 @@ export class AsrWorkerClient {
               elapsedMs: response.elapsed_ms,
               rawTextChars: response.raw_text.trim().length
             });
+
+            if (isAutoLanguageRequest && languageCandidate === "auto") {
+              const probeSpanish = shouldProbeSpanishFromAuto(response.raw_text);
+              if (probeSpanish) {
+                deferredAutoResponse = response;
+                this.#logger.info(
+                  "ASR auto transcript appears English-biased; probing Spanish hint",
+                  {
+                    endpoint: this.#endpoint,
+                    rawTextChars: response.raw_text.trim().length
+                  }
+                );
+                break;
+              }
+            }
+
+            if (
+              isAutoLanguageRequest &&
+              languageCandidate === "es" &&
+              deferredAutoResponse
+            ) {
+              const arbitration = chooseBetweenAutoAndSpanish(
+                deferredAutoResponse,
+                response
+              );
+              this.#logger.info("ASR language arbitration complete", {
+                endpoint: this.#endpoint,
+                chosen: arbitration.chosen
+              });
+              this.#endpointDisabledUntil = 0;
+              return arbitration.response;
+            }
 
             this.#endpointDisabledUntil = 0;
             return response;
@@ -347,6 +518,17 @@ export class AsrWorkerClient {
         if (abortCandidates) {
           break;
         }
+      }
+
+      if (deferredAutoResponse) {
+        this.#logger.warn(
+          "ASR Spanish probe did not produce a better transcript; using auto result",
+          {
+            endpoint: this.#endpoint
+          }
+        );
+        this.#endpointDisabledUntil = 0;
+        return deferredAutoResponse;
       }
 
       const shouldCooldown = failureErrors.some((error) =>

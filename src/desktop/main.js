@@ -27,7 +27,7 @@ app.disableHardwareAcceleration();
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
-function createAudioRecorder(settings) {
+function createAudioRecorder(settings, logger) {
   const useStub = process.env.FEATHERTALK_AUDIO_MODE === "stub";
   if (useStub) {
     return new AudioRecorderService();
@@ -38,7 +38,8 @@ function createAudioRecorder(settings) {
   return new WindowsWasapiRecorderService({
     ffmpegPath,
     microphoneDeviceId: settings.microphoneDeviceId,
-    allowDshowFallback: settings.audioAllowDshowFallback !== false
+    allowDshowFallback: settings.audioAllowDshowFallback !== false,
+    logger
   });
 }
 
@@ -174,7 +175,7 @@ async function bootstrap() {
   }
 
   const controller = new FeatherTalkAppController({
-    audioRecorder: createAudioRecorder(settings),
+    audioRecorder: createAudioRecorder(settings, logger),
     asrClient: createAsrClient(settings, logger),
     llamaClient,
     pasteController: new WindowsPasteController(),
@@ -221,6 +222,3 @@ if (hasSingleInstanceLock) {
   console.log("FeatherTalk is already running in the tray. Close the existing instance before starting a new one.");
   app.quit();
 }
-
-
-

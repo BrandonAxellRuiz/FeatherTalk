@@ -100,6 +100,34 @@ function stripCommonPreamble(text) {
   return lines.slice(1).join("\n");
 }
 
+function stripReasoningArtifacts(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const cleanedLines = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const lower = trimmed.toLowerCase();
+
+    const isReasoningStart =
+      lower.startsWith("removed filler words") ||
+      lower.startsWith("i removed the following") ||
+      lower.startsWith("removed the following") ||
+      lower.startsWith("changes made") ||
+      lower.startsWith("edits made") ||
+      lower.startsWith("not present, but") ||
+      lower.startsWith("filler words removed");
+
+    if (isReasoningStart) {
+      break;
+    }
+
+    cleanedLines.push(line);
+  }
+
+  return cleanedLines.join("\n");
+}
+
 function removeFillerWords(text) {
   return text
     .replace(/\b(?:um+|uh+|erm+|emm+|hmm+|eh+|este+|pues)\b/gi, "")
@@ -155,7 +183,8 @@ function tokenOverlap(rawText, cleanedText) {
 function postProcessCleanup(text) {
   const noFence = trimFence(text);
   const noPreamble = stripCommonPreamble(noFence);
-  const noFillers = removeFillerWords(noPreamble);
+  const noReasoning = stripReasoningArtifacts(noPreamble);
+  const noFillers = removeFillerWords(noReasoning);
   const deduped = collapseImmediateDuplicateWords(noFillers);
   return normalizePunctuationSpacing(deduped);
 }
@@ -346,7 +375,29 @@ export class LlamaCleanupClient {
     }
   }
 
-  #buildOllamaRequest(prompt, numPredict = this.#numPredict) {
+  #estimatePredictFromRawText(rawText) {
+    const normalized = normalizeSpaces(rawText ?? "");
+    const approxTokens = Math.ceil(normalized.length / 3.5);
+    return Math.max(96, Math.min(1024, approxTokens));
+  }
+
+  #resolveNumPredict(rawText, fallback = 96) {
+    const configured = Number(this.#numPredict);
+    if (Number.isFinite(configured) && configured <= 0) {
+      return -1;
+    }
+
+    const estimated = this.#estimatePredictFromRawText(rawText);
+    const base = Number.isFinite(configured) && configured > 0 ? configured : fallback;
+    return Math.max(base, estimated);
+  }
+
+  #buildOllamaRequest(prompt, numPredict) {
+    const resolvedNumPredict =
+      Number.isFinite(numPredict) || numPredict === -1
+        ? numPredict
+        : this.#resolveNumPredict(prompt, 96);
+
     return {
       model: this.#model,
       system: SYSTEM_PROMPT,
@@ -355,7 +406,7 @@ export class LlamaCleanupClient {
       keep_alive: this.#keepAlive,
       options: {
         temperature: 0,
-        num_predict: numPredict
+        num_predict: resolvedNumPredict
       }
     };
   }
@@ -405,14 +456,15 @@ export class LlamaCleanupClient {
     return this.#warmupPromise;
   }
 
-  async #cleanWithOllama({ prompt }) {
+  async #cleanWithOllama({ prompt, rawText }) {
     const errors = [];
+    const numPredict = this.#resolveNumPredict(rawText, 96);
 
     for (let attempt = 0; attempt <= this.#httpRetries; attempt += 1) {
       try {
         const payload = await this.#fetchJson(
           `${this.#baseUrl}/api/generate`,
-          this.#buildOllamaRequest(prompt)
+          this.#buildOllamaRequest(prompt, numPredict)
         );
 
         if (!payload.response || typeof payload.response !== "string") {
@@ -461,15 +513,17 @@ export class LlamaCleanupClient {
     );
   }
 
-  async #cleanWithLlamaCpp({ prompt }) {
+  async #cleanWithLlamaCpp({ prompt, rawText }) {
     const errors = [];
+    const resolved = this.#resolveNumPredict(rawText, 192);
+    const nPredict = resolved > 0 ? resolved : 1024;
 
     for (let attempt = 0; attempt <= this.#httpRetries; attempt += 1) {
       try {
         const payload = await this.#fetchJson(`${this.#baseUrl}/completion`, {
           prompt: `${SYSTEM_PROMPT}\n\n${prompt}`,
           temperature: 0,
-          n_predict: 192,
+          n_predict: nPredict,
           stop: ["<|eot_id|>"]
         });
 
@@ -572,9 +626,9 @@ export class LlamaCleanupClient {
 
     let outputText;
     if (this.#backend === "ollama") {
-      outputText = await this.#cleanWithOllama({ prompt });
+      outputText = await this.#cleanWithOllama({ prompt, rawText });
     } else if (this.#backend === "llama.cpp") {
-      outputText = await this.#cleanWithLlamaCpp({ prompt });
+      outputText = await this.#cleanWithLlamaCpp({ prompt, rawText });
     } else {
       throw new LlamaCleanupError(`Unsupported llama backend: ${this.#backend}`);
     }

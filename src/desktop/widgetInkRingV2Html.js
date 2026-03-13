@@ -20,7 +20,7 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
     #root {
       position: relative;
       width: 260px;
-      height: 170px;
+      height: 260px;
       opacity: 0;
       transform: scale(0.92);
       transition: opacity 190ms ease-in-out, transform 190ms ease-in-out;
@@ -51,7 +51,7 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       position: absolute;
       inset: 0;
       width: 260px;
-      height: 170px;
+      height: 260px;
       display: block;
     }
   </style>
@@ -59,7 +59,7 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
 <body>
   <div id="root">
     <div id="blur-core"></div>
-    <canvas id="canvas" width="520" height="340"></canvas>
+    <canvas id="canvas" width="520" height="520"></canvas>
   </div>
 
   <script>
@@ -70,7 +70,7 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
     const ctx = canvas.getContext("2d");
 
     const CENTER_X = 260;
-    const CENTER_Y = 170;
+    const CENTER_Y = 260;
     const ACTIVE_LEVEL = 0.045;
 
     // Tune these first for style:
@@ -80,35 +80,42 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       points: 260,
 
       restNoise: 0.95,
-      talkNoise: 10.2,
+      talkNoise: 15,
 
       restThick: 2.0,
-      talkThick: 4.3,
+      talkThick: 4,
 
       strands: 3,
       strandOffset: 1.0,
-      strandAlpha: 0.92,
+      strandAlpha: 7,
 
-      blobsPerSecondAtMax: 7.0,
-      blobSpawnThreshold: 0.08,
+      blobsPerSecondAtMax: 3.0,
+      blobSpawnThreshold: 0.01,
       blobGateOpen: 0.13,
       blobGateClose: 0.055,
       blobSilenceHoldMs: 110,
-      blobLenMin: 6,
-      blobLenMax: 36,
-      blobBodyMinWidth: 1.2,
-      blobBodyMaxWidth: 7.8,
-      tendrilLenMax: 44,
-      maxActiveBlobs: 28,
+      blobLenMin: 12,
+      blobLenMax: 18,
+      blobBodyMinWidth: 12,
+      blobBodyMaxWidth: 20,
+      blobDriftSpeed: 38,
+      maxActiveBlobs: 12,
       silenceClearMultiplier: 2.8,
 
       lockBlobSide: false,
       lockedBlobAngle: -1.05,
       blobAngleDrift: 0.42,
-      blobSpread: 0.72,
+      blobSpread: 3.14,
 
-      brushSize: 96,
-      brushRoughness: 0.52,
+      particleChance: 0.35,
+      particleSpeed: 28,
+      particleTtl: 0.9,
+      particleSizeMin: 1.2,
+      particleSizeMax: 3.5,
+      maxParticles: 40,
+
+      brushSize: 960,
+      brushRoughness: 52,
       bleedAlpha: 0.12,
       loadingNoise: 4.0
     };
@@ -124,6 +131,7 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       clusterAngle: -1.05,
       blobAccumulator: 0,
       blobs: [],
+      particles: [],
       blobGateActive: false,
       blobSilenceMs: 0,
       visible: false,
@@ -296,14 +304,25 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
         : state.clusterAngle + Math.sin(phase * 0.7) * 0.35;
       const angle = baseAngle + (Math.random() * 2 - 1) * cfg.blobSpread;
 
+      const blobW = lerp(cfg.blobBodyMinWidth, cfg.blobBodyMaxWidth, energy) * (0.7 + local * 0.3);
+      const blobH = lerp(cfg.blobLenMin, cfg.blobLenMax, energy) * (0.7 + local * 0.3);
+
       state.blobs.push({
         angle,
         local,
-        len: lerp(cfg.blobLenMin, cfg.blobLenMax, energy) * (0.65 + local * 0.55),
-        width: lerp(cfg.blobBodyMinWidth, cfg.blobBodyMaxWidth, energy) * (0.65 + local * 0.45),
-        tendrilLen: lerp(cfg.blobLenMin, cfg.tendrilLenMax, energy) * (0.55 + local * 0.5),
-        ttl: 0.24 + local * 0.28,
-        age: 0
+        w: blobW,
+        h: blobH,
+        drift: 0,
+        driftSpeed: cfg.blobDriftSpeed * (0.6 + local * 0.5),
+        ttl: 0.8 + local * 0.7,
+        age: 0,
+        particleTimer: 0,
+        shapeSeed: Math.random() * 999,
+        stretchX: 0.7 + Math.random() * 0.6,
+        stretchY: 0.7 + Math.random() * 0.6,
+        shapeRot: Math.random() * Math.PI * 2,
+        noiseScale: 1.2 + Math.random() * 1.6,
+        noiseAmp: 0.2 + Math.random() * 0.25
       });
 
       if (state.blobs.length > cfg.maxActiveBlobs) {
@@ -311,58 +330,146 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       }
     }
 
-    function drawBlob(blob, phase) {
+    function spawnParticle(x, y, angle, speed) {
+      if (state.particles.length >= cfg.maxParticles) {
+        return;
+      }
+      const spread = (Math.random() - 0.5) * 0.8;
+      const dir = angle + spread;
+      const spd = speed * (0.5 + Math.random() * 0.7);
+      state.particles.push({
+        x, y,
+        vx: Math.cos(dir) * spd,
+        vy: Math.sin(dir) * spd,
+        size: lerp(cfg.particleSizeMin, cfg.particleSizeMax, Math.random()),
+        ttl: cfg.particleTtl * (0.5 + Math.random() * 0.5),
+        age: 0,
+        wobSeed: Math.random() * 100
+      });
+    }
+
+    function updateAndDrawParticles(dtSec, phase) {
+      for (let i = state.particles.length - 1; i >= 0; i -= 1) {
+        const p = state.particles[i];
+        p.age += dtSec;
+        if (p.age >= p.ttl) {
+          state.particles.splice(i, 1);
+          continue;
+        }
+
+        const life = 1 - p.age / p.ttl;
+        // Slow down + gentle drift
+        const drag = 0.97;
+        p.vx *= drag;
+        p.vy *= drag;
+        // Gentle lateral wobble
+        const wobF = vnoise2(p.wobSeed + phase * 1.5, p.age * 3) * 12;
+        p.x += p.vx * dtSec + wobF * dtSec;
+        p.y += p.vy * dtSec + wobF * dtSec * 0.6;
+
+        const alpha = smoothstep(life) * 0.85;
+        const r = p.size * (0.6 + 0.4 * life);
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = "rgba(255,255,255,1)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function drawBlob(blob, phase, dtSec) {
       const life = Math.max(0, 1 - blob.age / blob.ttl);
       if (life <= 0) {
         return false;
       }
 
-      const wob = vnoise2(blob.local * 9 + phase * 1.2, 3.3 + phase * 0.7);
-      const angle = blob.angle + wob * 0.22;
-      const startR = cfg.radius + 3 + blob.local * 5.6;
-      const len = blob.len * (0.6 + 0.4 * life);
+      // Drift outward over time
+      blob.drift += blob.driftSpeed * dtSec;
 
-      const x0 = CENTER_X + Math.cos(angle) * startR;
-      const y0 = CENTER_Y + Math.sin(angle) * startR;
-      const x1 = CENTER_X + Math.cos(angle) * (startR + len);
-      const y1 = CENTER_Y + Math.sin(angle) * (startR + len);
-
-      const bodyWidth = Math.max(0.9, blob.width * life);
-
-      ctx.beginPath();
-      ctx.strokeStyle = "rgba(255,255,255,0.95)";
-      ctx.lineCap = "round";
-      ctx.lineWidth = bodyWidth;
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.stroke();
-
-      const tendrilCount = 1 + Math.floor(2 + blob.local * 2);
-      for (let i = 0; i < tendrilCount; i += 1) {
-        const dir = angle + (Math.random() * 2 - 1) * 0.35;
-        const tLen = blob.tendrilLen * (0.35 + Math.random() * 0.45) * life;
-        const tx = x1 + Math.cos(dir) * tLen;
-        const ty = y1 + Math.sin(dir) * tLen;
-
-        ctx.beginPath();
-        ctx.strokeStyle = "rgba(255,255,255,0.8)";
-        ctx.lineCap = "round";
-        ctx.lineWidth = Math.max(0.5, bodyWidth * 0.34);
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(tx, ty);
-        ctx.stroke();
+      // Fade: quick appear, hold, then fade at the end
+      const appear = smoothstep(Math.min(1, blob.age / 0.15));
+      const fade = life < 0.3 ? smoothstep(life / 0.3) : 1;
+      const alpha = appear * fade;
+      if (alpha <= 0.01) {
+        return true;
       }
 
-      if (blob.local > 0.55) {
-        const dotR = startR + len + 2 + blob.local * 5;
-        const dx = CENTER_X + Math.cos(angle + wob * 0.18) * dotR;
-        const dy = CENTER_Y + Math.sin(angle + wob * 0.18) * dotR;
-        const dotSize = 0.8 + life * 2.6 * (0.45 + blob.local * 0.55);
+      // Angle with gentle wobble
+      const wob = vnoise2(blob.local * 9 + phase * 0.5, 3.3 + phase * 0.3);
+      const angle = blob.angle + wob * 0.15;
 
-        ctx.beginPath();
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.arc(dx, dy, dotSize, 0, Math.PI * 2);
-        ctx.fill();
+      // Position: starts at ring edge, drifts outward
+      const r = cfg.radius + blob.drift;
+      const perpA = angle + Math.PI * 0.5;
+
+      // Gentle lateral wobble while drifting
+      const latWob = vnoise2(
+        blob.local * 5 + phase * 0.4,
+        phase * 0.25 + blob.angle * 2
+      ) * 8;
+
+      const cx = CENTER_X + Math.cos(angle) * r + Math.cos(perpA) * latWob;
+      const cy = CENTER_Y + Math.sin(angle) * r + Math.sin(perpA) * latWob;
+
+      // Organic wobbling shape — unique per blob
+      const pts = 40;
+
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.88;
+      ctx.fillStyle = "rgba(255,255,255,1)";
+      ctx.beginPath();
+
+      for (let i = 0; i <= pts; i += 1) {
+        const t = i / pts;
+        const a = t * Math.PI * 2;
+
+        // Apply per-blob random rotation to the sampling angle
+        const sa = a + blob.shapeRot;
+
+        // Multi-octave noise for varied organic shape
+        const n1 = vnoise2(
+          Math.cos(sa) * blob.noiseScale + blob.shapeSeed,
+          Math.sin(sa) * blob.noiseScale + blob.shapeSeed * 0.7 + phase * 0.25
+        );
+        const n2 = vnoise2(
+          Math.cos(sa * 2.3) * blob.noiseScale * 0.6 + blob.shapeSeed * 1.3,
+          Math.sin(sa * 2.3) * blob.noiseScale * 0.6 + blob.shapeSeed * 0.4 + phase * 0.15
+        );
+        const noise = n1 * 0.7 + n2 * 0.3;
+
+        // Per-blob elliptical stretch
+        const rx = blob.w * 0.5 * blob.stretchX;
+        const ry = blob.h * 0.5 * blob.stretchY;
+        const baseR = Math.sqrt(
+          (rx * Math.cos(a)) * (rx * Math.cos(a)) +
+          (ry * Math.sin(a)) * (ry * Math.sin(a))
+        );
+        const blobR = baseR * (1 + noise * blob.noiseAmp);
+
+        const px = cx + Math.cos(a) * blobR;
+        const py = cy + Math.sin(a) * blobR;
+
+        if (i === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // Spawn particles from blob
+      blob.particleTimer += dtSec;
+      if (blob.particleTimer > 0.08 && alpha > 0.3) {
+        blob.particleTimer = 0;
+        if (Math.random() < cfg.particleChance * alpha) {
+          spawnParticle(cx, cy, angle, cfg.particleSpeed * alpha);
+        }
       }
 
       return true;
@@ -370,22 +477,18 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
 
     function updateAndDrawBlobs(energy, dtSec, phase) {
       if (energy < cfg.blobSpawnThreshold) {
-        // Silence path: drop blobs immediately so only the subtle ring remains.
+        // Silence: stop spawning but let existing blobs fade naturally
         state.blobAccumulator = 0;
-        if (state.blobs.length > 0) {
-          state.blobs.length = 0;
-        }
-        return;
-      }
+      } else {
+        const spawnRate = cfg.blobsPerSecondAtMax * (0.25 + 0.75 * energy);
+        state.blobAccumulator += spawnRate * dtSec;
+        const spawnCount = Math.floor(state.blobAccumulator);
 
-      const spawnRate = cfg.blobsPerSecondAtMax * (0.25 + 0.75 * energy);
-      state.blobAccumulator += spawnRate * dtSec;
-      const spawnCount = Math.floor(state.blobAccumulator);
-
-      if (spawnCount > 0) {
-        state.blobAccumulator -= spawnCount;
-        for (let i = 0; i < spawnCount; i += 1) {
-          spawnBlob(energy, phase);
+        if (spawnCount > 0) {
+          state.blobAccumulator -= spawnCount;
+          for (let i = 0; i < spawnCount; i += 1) {
+            spawnBlob(energy, phase);
+          }
         }
       }
 
@@ -393,20 +496,24 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
         const blob = state.blobs[i];
         blob.age += dtSec;
 
-        if (!drawBlob(blob, phase)) {
+        if (!drawBlob(blob, phase, dtSec)) {
           state.blobs.splice(i, 1);
         }
       }
     }
 
     function drawListening(dt) {
+      const dtSec = dt / 1000;
       const target = clamp01(state.levelRaw);
-      const smoothing = target > state.level ? 0.3 : 0.15;
-      state.level = lerp(state.level, target, smoothing);
+
+      // Time-based exponential smoothing: slow attack, slower release
+      const attackRate = 4.0;  // seconds to ~63% when rising
+      const releaseRate = 1.8; // seconds to ~63% when falling
+      const rate = target > state.level ? attackRate : releaseRate;
+      state.level = lerp(state.level, target, 1 - Math.exp(-rate * dtSec));
 
       const energy = Math.max(0, Math.min(1, (state.level - ACTIVE_LEVEL) / (1 - ACTIVE_LEVEL)));
       const rawEnergy = Math.max(0, Math.min(1, (state.levelRaw - ACTIVE_LEVEL) / (1 - ACTIVE_LEVEL)));
-      const dtSec = dt / 1000;
 
       if (rawEnergy >= cfg.blobGateOpen) {
         state.blobGateActive = true;
@@ -429,6 +536,7 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
 
       drawRing(energy, state.phase);
       updateAndDrawBlobs(blobEnergy, dtSec, state.phase);
+      updateAndDrawParticles(dtSec, state.phase);
     }
 
     function drawLoading(dt) {
