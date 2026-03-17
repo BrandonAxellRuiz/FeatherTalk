@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 
 function writableCwdPath(...segments) {
@@ -8,6 +9,10 @@ function localAppDataRoot() {
   const value = process.env.LOCALAPPDATA;
   if (value && value.trim().length > 0) {
     return value;
+  }
+
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support");
   }
 
   return null;
@@ -62,4 +67,8 @@ export function resolveModelsDir() {
 
 export function resolveHistoryDbPath() {
   return path.join(resolveAppRoot(), "data", "history.db");
+}
+
+export function resolveHistoryFilePath() {
+  return path.join(resolveAppRoot(), "data", "history.jsonl");
 }

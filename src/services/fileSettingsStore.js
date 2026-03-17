@@ -18,10 +18,15 @@ async function readJsonFile(filePath) {
 
 export class FileSettingsStore extends SettingsStore {
   #filePath;
+  #isFirstRun = true;
 
   constructor({ filePath, seed } = {}) {
     super(seed ?? DEFAULT_SETTINGS);
     this.#filePath = filePath ?? resolveConfigPath();
+  }
+
+  get isFirstRun() {
+    return this.#isFirstRun;
   }
 
   get filePath() {
@@ -37,6 +42,7 @@ export class FileSettingsStore extends SettingsStore {
       const saved = await readJsonFile(candidate);
       if (saved && typeof saved === "object") {
         this.#filePath = candidate;
+        this.#isFirstRun = false;
         super.update(saved);
         return this.getAll();
       }

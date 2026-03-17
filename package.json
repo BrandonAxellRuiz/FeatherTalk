@@ -8,10 +8,10 @@
                     "start":  "npm.cmd run start:demo",
                     "start:demo":  "node src/index.js",
                     "start:desktop":  "electron src/desktop/main.js",
-                    "start:asr-worker":  ".\\.venv-asr\\Scripts\\python.exe scripts/parakeet-asr-worker.py",
+                    "start:asr-worker":  "node -e \"const py=process.platform==='win32'?'.venv-asr/Scripts/python.exe':'.venv-asr/bin/python';require('child_process').spawn(py,['scripts/parakeet-asr-worker.py'],{stdio:'inherit'}).on('exit',c=>process.exit(c??1))\"",
                     "diagnose:mic":  "node scripts/diagnose-mic.js",
                     "test":  "node scripts/run-tests.js",
-                    "start:all":  "powershell -ExecutionPolicy Bypass -File scripts/start-all.ps1"
+                    "start:all":  "node -e \"const p=process.platform==='win32'?['powershell',['-ExecutionPolicy','Bypass','-File','scripts/start-all.ps1']]:['bash',['scripts/start-all.sh']];require('child_process').spawn(p[0],p[1],{stdio:'inherit'}).on('exit',c=>process.exit(c??1))\""
                 },
     "engines":  {
                     "node":  "\u003e=20"

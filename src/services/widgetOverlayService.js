@@ -44,6 +44,34 @@ export class WidgetOverlayService {
     this.#events.push({ type: "hide" });
   }
 
+  setMode(mode) {
+    this.#events.push({ type: "mode", value: mode });
+  }
+
+  set_mode(mode) {
+    this.setMode(mode);
+  }
+
+  setPosition(x, y) {
+    this.#events.push({ type: "position", value: { x, y } });
+  }
+
+  set_position(x, y) {
+    this.setPosition(x, y);
+  }
+
+  setStage(stage) {
+    this.#events.push({ type: "stage", value: stage });
+  }
+
+  setHotkey(hotkey) {
+    this.#events.push({ type: "hotkey", value: hotkey });
+  }
+
+  emitEvent(payload) {
+    this.#events.push(payload);
+  }
+
   hide_widget() {
     this.hideWidget();
   }

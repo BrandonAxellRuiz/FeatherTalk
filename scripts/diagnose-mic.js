@@ -3,8 +3,12 @@ import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
 
+const IS_MACOS = process.platform === "darwin";
+
 const settingsCandidates = [
-  path.join(process.env.LOCALAPPDATA || "", "FeatherTalk", "config", "settings.json"),
+  IS_MACOS
+    ? path.join(os.homedir(), "Library", "Application Support", "FeatherTalk", "config", "settings.json")
+    : path.join(process.env.LOCALAPPDATA || "", "FeatherTalk", "config", "settings.json"),
   path.join(process.cwd(), "data", "localappdata", "FeatherTalk", "config", "settings.json")
 ].filter(Boolean);
 
@@ -125,24 +129,190 @@ function normalizeDshowInput(deviceId) {
   return `audio=${raw}`;
 }
 
-async function main() {
-  const settings = await readSettings();
-  const configuredMic = settings.microphoneDeviceId ?? "default";
-  const ffmpegPath =
-    process.env.FEATHERTALK_FFMPEG_PATH || settings.ffmpegPath || "ffmpeg";
+function parseAvfoundationAudioDevices(stderrText) {
+  const lines = `${stderrText ?? ""}`.split(/\r?\n/);
+  const devices = [];
+  let inAudioSection = false;
 
-  console.log(`FeatherTalk mic diagnose - ffmpeg: ${ffmpegPath}`);
-  console.log(`Configured microphoneDeviceId: ${configuredMic}`);
+  for (const line of lines) {
+    if (/avfoundation audio devices/i.test(line)) {
+      inAudioSection = true;
+      continue;
+    }
 
-  const version = await run(ffmpegPath, ["-version"]);
-  printBlock("ffmpeg -version (stdout)", version.stdout);
-  if (!version.ok) {
-    printBlock("ffmpeg -version (stderr)", version.stderr);
-    console.log("\nFAIL: ffmpeg is not available. Install ffmpeg and ensure it is in PATH.");
-    process.exitCode = 1;
+    if (/avfoundation video devices/i.test(line)) {
+      inAudioSection = false;
+      continue;
+    }
+
+    if (!inAudioSection) {
+      continue;
+    }
+
+    const match = line.match(/\[(\d+)]\s+(.+)/);
+    if (match) {
+      devices.push({ index: match[1], name: match[2].trim() });
+    }
+  }
+
+  return devices;
+}
+
+async function diagnoseMac(ffmpegPath, configuredMic) {
+  const avfDevices = await run(ffmpegPath, [
+    "-hide_banner",
+    "-list_devices",
+    "true",
+    "-f",
+    "avfoundation",
+    "-i",
+    ""
+  ]);
+
+  printBlock("AVFoundation device listing (stderr)", avfDevices.stderr);
+
+  const audioDevices = parseAvfoundationAudioDevices(
+    `${avfDevices.stderr}\n${avfDevices.stdout}`
+  );
+
+  if (audioDevices.length > 0) {
+    console.log("\nDetected audio devices:");
+    for (const dev of audioDevices) {
+      console.log(`  [${dev.index}] ${dev.name}`);
+    }
+  } else {
+    console.log("\nWARNING: No audio input devices detected by AVFoundation.");
+
+    // Check system_profiler for input devices to distinguish hardware vs permission issue
+    const profiler = await run("system_profiler", ["SPAudioDataType"], 10000);
+    const profilerText = `${profiler.stdout ?? ""}`.toLowerCase();
+    const hasInputDevice =
+      profilerText.includes("input") ||
+      profilerText.includes("microphone") ||
+      profilerText.includes("mic");
+
+    if (!hasInputDevice) {
+      console.log("No microphone hardware detected on this Mac.");
+      console.log("This Mac (likely a Mac mini, Mac Pro, or Mac Studio) has no built-in microphone.");
+      console.log("Connect an external microphone (USB, headset, or audio interface) and retry.");
+    } else {
+      console.log("A microphone may be connected but macOS TCC privacy is blocking access.");
+      console.log("Your terminal app needs microphone permission. Try these steps:");
+      console.log("  1. Run directly in terminal: ffmpeg -f avfoundation -i \":default\" -t 1 /tmp/mic-test.wav");
+      console.log("     (this may trigger the macOS permission prompt)");
+      console.log("  2. If no prompt appears, reset permissions: tccutil reset Microphone");
+      console.log("     then retry step 1.");
+      console.log("  3. Check System Settings > Privacy & Security > Microphone");
+      console.log("     and ensure your terminal app (Terminal, iTerm2, VS Code, etc.) is enabled.");
+    }
+  }
+
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "feathertalk-mic-"));
+  const avfFile = path.join(tempRoot, "probe-avf.wav");
+  await mkdir(tempRoot, { recursive: true });
+
+  // Determine which input to try
+  let avfInput = ":default";
+  if (configuredMic !== "default") {
+    avfInput = configuredMic.startsWith(":") ? configuredMic : `:${configuredMic}`;
+  } else if (audioDevices.length > 0) {
+    avfInput = `:${audioDevices[0].index}`;
+  }
+
+  const captureAvf = await run(
+    ffmpegPath,
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "avfoundation",
+      "-i",
+      avfInput,
+      "-t",
+      "1",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "pcm_s16le",
+      "-y",
+      avfFile
+    ],
+    20000
+  );
+
+  printBlock(`1s AVFoundation capture (${avfInput}) (stderr)`, captureAvf.stderr);
+
+  // If the configured input failed and it wasn't :0, try :0 as fallback
+  if (!captureAvf.ok && avfInput !== ":0") {
+    const fallbackFile = path.join(tempRoot, "probe-avf-fallback.wav");
+    const fallback = await run(
+      ffmpegPath,
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "avfoundation",
+        "-i",
+        ":0",
+        "-t",
+        "1",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        "-y",
+        fallbackFile
+      ],
+      20000
+    );
+
+    printBlock("1s AVFoundation capture (:0) (stderr)", fallback.stderr);
+    await rm(tempRoot, { recursive: true, force: true });
+
+    if (fallback.ok) {
+      console.log("\nPASS: AVFoundation capture succeeded with :0.");
+      console.log("Recommendation: set microphoneDeviceId to \"0\" in settings.");
+      return;
+    }
+  } else {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+
+  if (captureAvf.ok) {
+    console.log(`\nPASS: AVFoundation capture succeeded (${avfInput}).`);
     return;
   }
 
+  console.log("\nFAIL: AVFoundation capture failed.");
+  if (audioDevices.length === 0) {
+    const profilerCheck = await run("system_profiler", ["SPAudioDataType"], 10000);
+    const profilerOut = `${profilerCheck.stdout ?? ""}`.toLowerCase();
+    const hasMicHardware =
+      profilerOut.includes("input") ||
+      profilerOut.includes("microphone") ||
+      profilerOut.includes("mic");
+
+    if (!hasMicHardware) {
+      console.log("Root cause: no microphone hardware detected.");
+      console.log("Connect an external microphone (USB, headset, or audio interface) and retry.");
+    } else {
+      console.log("Root cause: macOS is blocking microphone access for this terminal app.");
+      console.log("Fix: run 'tccutil reset Microphone' then retry, or grant microphone");
+      console.log("permission to your terminal in System Settings > Privacy & Security > Microphone.");
+    }
+  } else {
+    console.log("Check System Settings > Privacy & Security > Microphone.");
+  }
+  process.exitCode = 1;
+}
+
+async function diagnoseWindows(ffmpegPath, configuredMic) {
   const wasapiDevices = await run(ffmpegPath, [
     "-hide_banner",
     "-list_devices",
@@ -251,6 +421,32 @@ async function main() {
 
   console.log("\nFAIL: WASAPI and DSHOW capture failed. Check mic privacy permissions and chosen microphoneDeviceId.");
   process.exitCode = 1;
+}
+
+async function main() {
+  const settings = await readSettings();
+  const configuredMic = settings.microphoneDeviceId ?? "default";
+  const ffmpegPath =
+    process.env.FEATHERTALK_FFMPEG_PATH || settings.ffmpegPath || "ffmpeg";
+
+  console.log(`FeatherTalk mic diagnose - ffmpeg: ${ffmpegPath}`);
+  console.log(`Configured microphoneDeviceId: ${configuredMic}`);
+  console.log(`Platform: ${process.platform}`);
+
+  const version = await run(ffmpegPath, ["-version"]);
+  printBlock("ffmpeg -version (stdout)", version.stdout);
+  if (!version.ok) {
+    printBlock("ffmpeg -version (stderr)", version.stderr);
+    console.log("\nFAIL: ffmpeg is not available. Install ffmpeg and ensure it is in PATH.");
+    process.exitCode = 1;
+    return;
+  }
+
+  if (IS_MACOS) {
+    await diagnoseMac(ffmpegPath, configuredMic);
+  } else {
+    await diagnoseWindows(ffmpegPath, configuredMic);
+  }
 }
 
 main().catch((error) => {

@@ -1,3 +1,5 @@
+const IS_MACOS = process.platform === "darwin";
+
 function normalizeToken(token) {
   const value = token.trim().toLowerCase();
 
@@ -11,7 +13,7 @@ function normalizeToken(token) {
       return "Shift";
     case "win":
     case "meta":
-      return "Super";
+      return IS_MACOS ? "Control" : "Super";
     case "space":
       return "Space";
     case "enter":
@@ -46,16 +48,24 @@ export class ElectronHotkeyService {
   #globalShortcut;
   #registeredHotkey = null;
   #registeredAccelerator = null;
+  #additionalHotkeys = new Map();
 
   constructor({ globalShortcut }) {
     this.#globalShortcut = globalShortcut;
   }
 
   registerToggleHotkey(hotkey, handler) {
+    this.registerHotkey("__toggle__", hotkey, handler);
+    this.#registeredHotkey = hotkey;
+    this.#registeredAccelerator = toElectronAccelerator(hotkey);
+  }
+
+  registerHotkey(name, hotkey, handler) {
     const accelerator = toElectronAccelerator(hotkey);
 
-    if (this.#registeredAccelerator) {
-      this.#globalShortcut.unregister(this.#registeredAccelerator);
+    if (this.#additionalHotkeys.has(name)) {
+      const prev = this.#additionalHotkeys.get(name);
+      this.#globalShortcut.unregister(prev.accelerator);
     }
 
     const ok = this.#globalShortcut.register(accelerator, handler);
@@ -63,15 +73,26 @@ export class ElectronHotkeyService {
       throw new Error(`Unable to register global hotkey: ${hotkey}`);
     }
 
-    this.#registeredHotkey = hotkey;
-    this.#registeredAccelerator = accelerator;
+    this.#additionalHotkeys.set(name, { hotkey, accelerator, handler });
+  }
+
+  registerAdditionalHotkey(name, hotkey, handler) {
+    this.registerHotkey(name, hotkey, handler);
+  }
+
+  unregisterAdditionalHotkey(name) {
+    const entry = this.#additionalHotkeys.get(name);
+    if (entry) {
+      this.#globalShortcut.unregister(entry.accelerator);
+      this.#additionalHotkeys.delete(name);
+    }
   }
 
   unregister() {
-    if (this.#registeredAccelerator) {
-      this.#globalShortcut.unregister(this.#registeredAccelerator);
+    for (const [, entry] of this.#additionalHotkeys) {
+      this.#globalShortcut.unregister(entry.accelerator);
     }
-
+    this.#additionalHotkeys.clear();
     this.#registeredAccelerator = null;
     this.#registeredHotkey = null;
   }

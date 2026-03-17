@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { AudioCaptureError } from "../core/errors.js";
 import { resolveRecordingsDirCandidates } from "./appPaths.js";
 
+const IS_MACOS = process.platform === "darwin";
 const MIN_ACTIVE_LEVEL = 0.005;
 const ATTACK_SMOOTHING = 0.6;
 const RELEASE_SMOOTHING = 0.25;
@@ -93,11 +94,92 @@ function parseDshowAudioDevices(stderrText) {
   return [...new Set(names)];
 }
 
+function parseAvfoundationAudioDevices(stderrText) {
+  const lines = `${stderrText ?? ""}`.split(/\r?\n/);
+  const devices = [];
+  let inAudioSection = false;
+
+  for (const line of lines) {
+    if (/avfoundation audio devices/i.test(line)) {
+      inAudioSection = true;
+      continue;
+    }
+
+    if (/avfoundation video devices/i.test(line)) {
+      inAudioSection = false;
+      continue;
+    }
+
+    if (!inAudioSection) {
+      continue;
+    }
+
+    const match = line.match(/\[(\d+)]\s+(.+)/);
+    if (match) {
+      devices.push({ index: match[1], name: match[2].trim() });
+    }
+  }
+
+  return devices;
+}
+
+function buildMacInputCandidates(deviceId, capability = {}) {
+  const avfDevices = Array.isArray(capability.avfAudioDevices)
+    ? capability.avfAudioDevices
+    : [];
+  const candidates = [];
+  const raw = `${deviceId ?? "default"}`.trim();
+
+  if (!raw || raw === "default") {
+    candidates.push({
+      format: "avfoundation",
+      input: ":default",
+      label: "AVFoundation :default"
+    });
+    candidates.push({
+      format: "avfoundation",
+      input: ":0",
+      label: "AVFoundation :0"
+    });
+
+    for (const dev of avfDevices) {
+      candidates.push({
+        format: "avfoundation",
+        input: `:${dev.index}`,
+        label: `AVFoundation :${dev.index} (${dev.name})`
+      });
+    }
+  } else {
+    const input = raw.startsWith(":") ? raw : `:${raw}`;
+    candidates.push({
+      format: "avfoundation",
+      input,
+      label: `AVFoundation ${input}`
+    });
+    candidates.push({
+      format: "avfoundation",
+      input: ":default",
+      label: "AVFoundation :default"
+    });
+    candidates.push({
+      format: "avfoundation",
+      input: ":0",
+      label: "AVFoundation :0"
+    });
+  }
+
+  return dedupeInputs(candidates);
+}
+
 function buildInputCandidates(
   deviceId,
   allowDshowFallback = true,
   capability = {}
 ) {
+  if (IS_MACOS) {
+    return buildMacInputCandidates(deviceId, capability);
+  }
+
   const { raw, normalized } = normalizeMicId(deviceId);
   const supportsWasapi = capability.supportsWasapi !== false;
   const dshowAudioDevices = Array.isArray(capability.dshowAudioDevices)
@@ -203,6 +285,31 @@ async function runFfmpegProbe(ffmpegPath, args, timeoutMs = 3000) {
 }
 
 async function detectFfmpegCaptureCapability(ffmpegPath) {
+  if (IS_MACOS) {
+    const avfProbe = await runFfmpegProbe(ffmpegPath, [
+      "-hide_banner",
+      "-list_devices",
+      "true",
+      "-f",
+      "avfoundation",
+      "-i",
+      ""
+    ]);
+
+    const avfText = `${avfProbe.stderr ?? ""}\n${avfProbe.stdout ?? ""}`;
+    const supportsAvfoundation = !avfText
+      .toLowerCase()
+      .includes("unknown input format");
+    const avfAudioDevices = parseAvfoundationAudioDevices(avfText);
+
+    return {
+      supportsWasapi: false,
+      dshowAudioDevices: [],
+      supportsAvfoundation,
+      avfAudioDevices
+    };
+  }
+
   const wasapiProbe = await runFfmpegProbe(ffmpegPath, [
     "-hide_banner",
     "-list_devices",
@@ -570,22 +677,28 @@ function explainMicFailure(message) {
   const text = `${message}`.toLowerCase();
 
   if (text.includes("enoent") || text.includes("not found")) {
-    return "ffmpeg no esta disponible en PATH. Instala ffmpeg o configura settings.ffmpegPath.";
+    return IS_MACOS
+      ? "ffmpeg no esta disponible en PATH. Instala con: brew install ffmpeg"
+      : "ffmpeg no esta disponible en PATH. Instala ffmpeg o configura settings.ffmpegPath.";
   }
 
   if (text.includes("permission") || text.includes("acceso denegado")) {
-    return "Windows bloqueo acceso al microfono. Revisa Privacy > Microphone para permitir la app.";
+    return IS_MACOS
+      ? "macOS bloqueo acceso al microfono. Ve a Ajustes del Sistema > Privacidad > Microfono."
+      : "Windows bloqueo acceso al microfono. Revisa Privacy > Microphone para permitir la app.";
   }
 
-  if (text.includes("unknown input format") || text.includes("wasapi")) {
-    return "El ffmpeg configurado no soporta WASAPI. Usa DSHOW con microphoneDeviceId explicito o cambia ffmpegPath.";
+  if (text.includes("unknown input format")) {
+    return IS_MACOS
+      ? "El ffmpeg configurado no soporta avfoundation. Instala con: brew install ffmpeg"
+      : "El ffmpeg configurado no soporta WASAPI. Usa DSHOW con microphoneDeviceId explicito o cambia ffmpegPath.";
   }
 
   if (text.includes("no such") || text.includes("cannot find") || text.includes("device")) {
-    return "No se encontro el dispositivo de microfono. Ajusta settings.microphoneDeviceId o corre npm.cmd run diagnose:mic.";
+    return "No se encontro el dispositivo de microfono. Ajusta settings.microphoneDeviceId o corre npm run diagnose:mic.";
   }
 
-  return "Ejecuta npm.cmd run diagnose:mic para ver detalle de ffmpeg y dispositivos.";
+  return "Ejecuta npm run diagnose:mic para ver detalle de ffmpeg y dispositivos.";
 }
 
 export class WindowsWasapiRecorderService {

@@ -19,7 +19,13 @@ export const MODE_PROMPTS = Object.freeze({
     "Minimal cleanup only. Do not rename identifiers, APIs, variables, technical terms, or symbols. Keep original language and wording. Do not translate. Text:\n{raw_text}"
 });
 
-export function buildCleanupPrompt(mode, rawText) {
-  const template = MODE_PROMPTS[mode] ?? MODE_PROMPTS[CLEANUP_MODES.DEFAULT];
+export function buildCleanupPrompt(mode, rawText, customModes = {}) {
+  const template = customModes[mode] ?? MODE_PROMPTS[mode] ?? MODE_PROMPTS[CLEANUP_MODES.DEFAULT];
   return template.replace("{raw_text}", rawText);
+}
+
+export function getAllModes(customModes = {}) {
+  const builtIn = Object.values(CLEANUP_MODES);
+  const custom = Object.keys(customModes);
+  return [...builtIn, ...custom];
 }

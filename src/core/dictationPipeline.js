@@ -12,6 +12,14 @@ export class DictationPipeline {
     this.#pasteController = pasteController;
   }
 
+  get llamaClient() {
+    return this.#llamaClient;
+  }
+
+  get pasteController() {
+    return this.#pasteController;
+  }
+
   async processRecording({
     audioPath,
     language = "auto",
@@ -19,7 +27,8 @@ export class DictationPipeline {
     compute = "gpu",
     mode = CLEANUP_MODES.DEFAULT,
     context = {},
-    onStage
+    onStage,
+    onPreview
   }) {
     const startedAt = Date.now();
 
@@ -59,6 +68,25 @@ export class DictationPipeline {
       throw new LlamaCleanupError(error.message);
     }
     const llamaElapsedMs = Date.now() - llamaStartedAt;
+
+    if (onPreview) {
+      onStage?.("preview");
+      const previewResult = await onPreview(finalText, rawText);
+      if (previewResult.action === "cancel") {
+        return {
+          rawText,
+          finalText,
+          paste: { pasted: false, copied_to_clipboard: false, cancelled: true },
+          asrSource: asrResponse.source ?? "unknown",
+          asrWarning: asrResponse.warning ?? null,
+          asrElapsedMs,
+          llamaElapsedMs,
+          pasteElapsedMs: 0,
+          elapsedMs: Date.now() - startedAt
+        };
+      }
+      finalText = previewResult.text ?? finalText;
+    }
 
     onStage?.("paste");
     const pasteStartedAt = Date.now();
