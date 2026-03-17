@@ -41,10 +41,15 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       transform: translate(-50%, -50%);
       border-radius: 9999px;
       backdrop-filter: blur(13px) saturate(145%);
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      box-shadow: 0 0 42px rgba(255, 255, 255, 0.16);
+      background: rgba(100, 110, 120, 0.18);
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      box-shadow:
+        0 0 42px rgba(255, 255, 255, 0.16),
+        0 0 0 1.5px rgba(0, 0, 0, 0.15),
+        0 2px 20px rgba(0, 0, 0, 0.22),
+        0 0 60px rgba(0, 0, 0, 0.08);
       pointer-events: none;
+      animation: breathe 4s ease-in-out infinite;
     }
 
     canvas {
@@ -53,13 +58,154 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       width: 260px;
       height: 260px;
       display: block;
+      filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 2px rgba(0, 0, 0, 0.4));
+    }
+
+    #drag-grip {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60px;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.15);
+      background-image: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(255,255,255,0.3) 3px, rgba(255,255,255,0.3) 4.5px);
+      border-radius: 0 0 4px 4px;
+      cursor: grab;
+      pointer-events: auto;
+      z-index: 10;
+      transition: background 150ms;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    }
+
+    #drag-grip:hover {
+      background: rgba(255, 255, 255, 0.45);
+      background-image: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(255,255,255,0.5) 3px, rgba(255,255,255,0.5) 4.5px);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+    }
+
+    #mode-pill {
+      position: absolute;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255, 255, 255, 0.18);
+      backdrop-filter: blur(6px);
+      color: rgba(255, 255, 255, 0.92);
+      font: 500 12px "Segoe UI", Arial, sans-serif;
+      padding: 2px 10px;
+      border-radius: 8px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 180ms ease-in-out;
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
+      text-shadow: 0 0 4px rgba(0, 0, 0, 0.5), 0 0 8px rgba(0, 0, 0, 0.3);
+    }
+
+    #mode-pill.visible {
+      opacity: 1;
+    }
+
+    #mode-pill.dimmed {
+      opacity: 0.4;
+    }
+
+    #error-text {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255, 255, 255, 0.85);
+      font: 500 11px "Segoe UI", Arial, sans-serif;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 200ms ease-in-out;
+      text-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: center;
+    }
+    #error-text.visible { opacity: 1; }
+
+    @keyframes breathe {
+      0%, 100% { transform: translate(-50%, -50%) scale(1); }
+      50% { transform: translate(-50%, -50%) scale(1.012); }
+    }
+
+    #widget-toast {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-8px);
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(8px);
+      color: rgba(255, 255, 255, 0.92);
+      font: 500 11px "Segoe UI", Arial, sans-serif;
+      padding: 4px 12px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 200ms ease-in-out, transform 200ms ease-in-out;
+      z-index: 20;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      text-shadow: none;
+    }
+    #widget-toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    #shortcuts-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(8px);
+      border-radius: 10px;
+      padding: 10px 14px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 200ms ease-in-out;
+      z-index: 15;
+      min-width: 180px;
+    }
+    #shortcuts-overlay.visible { opacity: 1; }
+    .shortcut-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 3px 0;
+      font-size: 11px;
+    }
+    .shortcut-key {
+      font-family: "SF Mono", Consolas, Menlo, monospace;
+      color: #a5b4fc;
+      font-size: 10px;
+    }
+    .shortcut-action {
+      color: rgba(255, 255, 255, 0.75);
     }
   </style>
 </head>
 <body>
-  <div id="root">
+  <div id="root" role="application" aria-label="FeatherTalk dictation widget">
+    <div id="drag-grip"></div>
     <div id="blur-core"></div>
     <canvas id="canvas" width="520" height="520"></canvas>
+    <div id="mode-pill"></div>
+    <div id="error-text"></div>
+    <div id="widget-toast"></div>
+    <div id="shortcuts-overlay">
+      <div class="shortcut-row"><span class="shortcut-key"></span><span class="shortcut-action">Dictar</span></div>
+      <div class="shortcut-row"><span class="shortcut-key">Ctrl+Win+M</span><span class="shortcut-action">Modo</span></div>
+      <div class="shortcut-row"><span class="shortcut-key">Ctrl+Win+Z</span><span class="shortcut-action">Deshacer</span></div>
+      <div class="shortcut-row"><span class="shortcut-key">Esc</span><span class="shortcut-action">Cancelar</span></div>
+    </div>
   </div>
 
   <script>
@@ -68,6 +214,8 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
     const root = document.getElementById("root");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
+    const modePill = document.getElementById("mode-pill");
+    const errorText = document.getElementById("error-text");
 
     const CENTER_X = 260;
     const CENTER_Y = 260;
@@ -625,15 +773,53 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
       if (payload.type === "show") {
         state.visible = true;
         root.classList.add("visible");
+        modePill.classList.add("dimmed", "visible");
       }
 
       if (payload.type === "hide") {
         state.visible = false;
         root.classList.remove("visible");
+        modePill.classList.remove("visible", "dimmed");
+        document.getElementById("shortcuts-overlay").classList.remove("visible");
+        shortcutsVisible = false;
       }
 
       if (payload.type === "state") {
         state.mode = payload.value || state.mode;
+        if (state.mode === "recording") {
+          modePill.classList.remove("dimmed");
+          modePill.classList.add("visible");
+          document.getElementById("shortcuts-overlay").classList.remove("visible");
+          shortcutsVisible = false;
+        } else {
+          if (state.visible) {
+            modePill.classList.add("dimmed");
+          }
+        }
+
+        if (payload.value === "processing" || payload.value === "error") {
+          document.getElementById("shortcuts-overlay").classList.remove("visible");
+          shortcutsVisible = false;
+        }
+
+        if (payload.value === "error") {
+          errorText.textContent = payload.message || "Error";
+          errorText.classList.add("visible");
+        } else {
+          errorText.classList.remove("visible");
+        }
+      }
+
+      if (payload.type === "mode") {
+        modePill.textContent = payload.value || "";
+      }
+
+      if (payload.type === "toast") {
+        showWidgetToast(payload.value || "", payload.duration || 2000);
+      }
+
+      if (payload.type === "beep") {
+        playBeepTone(payload.tone);
       }
 
       if (payload.type === "level") {
@@ -642,7 +828,93 @@ export const WIDGET_HTML_INK_V2 = String.raw`<!doctype html>
           state.levelRaw = clamp01(v);
         }
       }
+
+      if (payload.type === "hotkey") {
+        const firstRow = document.querySelector("#shortcuts-overlay .shortcut-key");
+        if (firstRow) firstRow.textContent = payload.value || "";
+      }
     });
+
+    let shortcutsVisible = false;
+    root.addEventListener("mouseenter", () => {
+      if (state.visible && state.mode !== "recording" && state.mode !== "processing" && state.mode !== "error") {
+        document.getElementById("shortcuts-overlay").classList.add("visible");
+        shortcutsVisible = true;
+      }
+    });
+    root.addEventListener("mouseleave", () => {
+      document.getElementById("shortcuts-overlay").classList.remove("visible");
+      shortcutsVisible = false;
+    });
+
+    // Drag handling for grip bar
+    const dragGrip = document.getElementById("drag-grip");
+    let dragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+
+    dragGrip.addEventListener("mousedown", (e) => {
+      dragging = true;
+      dragStartX = e.screenX;
+      dragStartY = e.screenY;
+      dragGrip.style.cursor = "grabbing";
+      e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const dx = e.screenX - dragStartX;
+      const dy = e.screenY - dragStartY;
+      dragStartX = e.screenX;
+      dragStartY = e.screenY;
+      ipcRenderer.send("widget:drag-move", { dx, dy });
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      dragGrip.style.cursor = "grab";
+      ipcRenderer.send("widget:drag-end", {
+        x: window.screenX,
+        y: window.screenY
+      });
+    });
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function playBeepTone(tone) {
+      const tones = {
+        start:   { freqs: [880],     dur: 0.08,  gain: 0.15 },
+        stop:    { freqs: [440],     dur: 0.06,  gain: 0.12 },
+        success: { freqs: [660, 880], dur: 0.12, gain: 0.12 },
+        error:   { freqs: [220],     dur: 0.20,  gain: 0.14 }
+      };
+      const spec = tones[tone];
+      if (!spec) return;
+
+      const now = audioCtx.currentTime;
+      for (const freq of spec.freqs) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(spec.gain, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + spec.dur);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        osc.stop(now + spec.dur + 0.01);
+      }
+    }
+
+    let toastTimer = null;
+    function showWidgetToast(msg, durationMs = 2000) {
+      const wt = document.getElementById("widget-toast");
+      wt.textContent = msg;
+      wt.classList.add("visible");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => wt.classList.remove("visible"), durationMs);
+    }
 
     requestAnimationFrame(render);
   </script>

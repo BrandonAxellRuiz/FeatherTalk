@@ -1,4 +1,63 @@
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+
+const IS_MACOS = process.platform === "darwin";
+
+// ── macOS helpers (pbcopy / pbpaste / osascript) ──
+
+function runCommand(cmd, args, { input, timeoutMs = 4000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = execFile(cmd, args, { timeout: timeoutMs }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(stdout);
+    });
+
+    if (input != null) {
+      proc.stdin.end(input);
+    }
+  });
+}
+
+async function getMacClipboard() {
+  const output = await runCommand("pbpaste", []);
+  return output.replace(/\n$/, "");
+}
+
+async function setMacClipboard(text) {
+  await runCommand("pbcopy", [], { input: text });
+}
+
+async function sendCmdV() {
+  await runCommand("osascript", [
+    "-e",
+    'tell application "System Events" to keystroke "v" using command down'
+  ], { timeoutMs: 3000 });
+}
+
+async function macPasteWithRestore(text) {
+  let previous = "";
+  try {
+    previous = await getMacClipboard();
+  } catch {
+    previous = "";
+  }
+
+  await setMacClipboard(text);
+
+  // Small delay so the clipboard is ready before simulating the keystroke.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await sendCmdV();
+
+  // Wait for paste to complete, then restore.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  if (typeof previous === "string") {
+    await setMacClipboard(previous).catch(() => {});
+  }
+}
+
+// ── Windows helpers (PowerShell) ──
 
 function encodePowerShell(script) {
   return Buffer.from(script, "utf16le").toString("base64");
@@ -104,16 +163,55 @@ Write-Output 'ok'
 export class WindowsPasteController {
   #memoryClipboard = "";
 
+  async getClipboard() {
+    if (IS_MACOS) return getMacClipboard();
+    if (process.platform === "win32") return getClipboardText();
+    return this.#memoryClipboard;
+  }
+
+  async setClipboard(text) {
+    if (IS_MACOS) {
+      await setMacClipboard(text);
+      return;
+    }
+    if (process.platform === "win32") {
+      await setClipboardText(text);
+      return;
+    }
+    this.#memoryClipboard = text;
+  }
+
   async pasteText(text) {
     if (typeof text !== "string" || text.length === 0) {
       return { pasted: false, copied_to_clipboard: false, error: "Empty text" };
     }
 
+    // ── macOS path ──
+    if (IS_MACOS) {
+      try {
+        await macPasteWithRestore(text);
+        return { pasted: true, copied_to_clipboard: false };
+      } catch (error) {
+        try {
+          await setMacClipboard(text);
+        } catch {
+          // ignore
+        }
+        return {
+          pasted: false,
+          copied_to_clipboard: true,
+          error: error.message
+        };
+      }
+    }
+
+    // ── Unsupported platform stub ──
     if (process.platform !== "win32") {
       this.#memoryClipboard = text;
       return { pasted: true, copied_to_clipboard: false };
     }
 
+    // ── Windows path ──
     try {
       await pasteWithClipboardRestore(text);
       return { pasted: true, copied_to_clipboard: false };

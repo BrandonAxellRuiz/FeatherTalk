@@ -11,7 +11,11 @@ import {
   DEFAULT_HOTKEY_FALLBACKS
 } from "../src/desktop/hotkeyCandidates.js";
 import { AsrWorkerClient } from "../src/services/asrWorkerClient.js";
+import { BeepService } from "../src/services/beepService.js";
+import { HealthCheckService } from "../src/services/healthCheckService.js";
+import { HistoryService } from "../src/services/historyService.js";
 import { HotkeyService } from "../src/services/hotkeyService.js";
+import { PreviewService } from "../src/services/previewService.js";
 import { SettingsStore } from "../src/services/settingsStore.js";
 import { ToastNotifier } from "../src/services/toastNotifier.js";
 import { TrayIconService, TRAY_STATES } from "../src/services/trayIconService.js";
@@ -101,16 +105,29 @@ addTest("default hotkey fallbacks are available", () => {
 
 addTest("buildInputCandidates includes WASAPI and optional DSHOW fallback", () => {
   const list = buildInputCandidates("default", true).map((item) => item.label);
-  assert.deepEqual(list, [
-    "WASAPI default",
-    "WASAPI audio=default",
-    "DSHOW audio=default"
-  ]);
+
+  if (process.platform === "darwin") {
+    assert.deepEqual(list, [
+      "AVFoundation :default",
+      "AVFoundation :0"
+    ]);
+  } else {
+    assert.deepEqual(list, [
+      "WASAPI default",
+      "WASAPI audio=default",
+      "DSHOW audio=default"
+    ]);
+  }
 });
 
 addTest("buildInputCandidates can disable DSHOW fallback", () => {
   const list = buildInputCandidates("default", false);
-  assert.equal(list.some((item) => item.format === "dshow"), false);
+
+  if (process.platform === "darwin") {
+    assert.equal(list.every((item) => item.format === "avfoundation"), true);
+  } else {
+    assert.equal(list.some((item) => item.format === "dshow"), false);
+  }
 });
 
 addTest("ASR client uses fallback when HTTP endpoint fails", async () => {
@@ -713,6 +730,597 @@ addTest("Controller: retries ASR on CPU when GPU error appears", async () => {
   assert.equal(pasteCount, 1);
   assert.deepEqual(seenCompute, ["gpu", "cpu"]);
   assert.match(toast.events[0].message, /reintentando en cpu/i);
+});
+
+// ── F2: Success toast with timing ──
+
+addTest("Controller: success toast includes total time", async () => {
+  const toast = new ToastNotifier();
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() {
+        return { audioPath: "C:/tmp/test.wav" };
+      }
+    },
+    asrClient: {
+      async transcribe() {
+        return { raw_text: "hola" };
+      }
+    },
+    llamaClient: {
+      async cleanText() {
+        return "Hola.";
+      }
+    },
+    pasteController: {
+      async pasteText() {
+        return { pasted: true, copied_to_clipboard: false };
+      }
+    },
+    widget: new WidgetOverlayService(),
+    tray: new TrayIconService(),
+    toast,
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  const hotkey = new HotkeyService();
+  controller.registerHotkey(hotkey);
+
+  await hotkey.trigger();
+  await hotkey.trigger();
+
+  const successToast = toast.events.find((e) => /dictado pegado/i.test(e.message));
+  assert.ok(successToast, "Should have a success toast with total time");
+  assert.match(successToast.message, /\d+\.\d+s/);
+});
+
+// ── F6: Health check ──
+
+addTest("HealthCheck: reports ok for reachable services", async () => {
+  const service = new HealthCheckService({
+    asrEndpoint: "http://127.0.0.1:8787/transcribe",
+    llamaBackend: "ollama",
+    llamaBaseUrl: "http://127.0.0.1:11434",
+    fetchImpl: async () => ({ ok: true, status: 200 })
+  });
+
+  const result = await service.checkAll();
+  assert.equal(result.asr.ok, true);
+  assert.equal(result.llama.ok, true);
+});
+
+addTest("HealthCheck: reports failure when fetch throws", async () => {
+  const service = new HealthCheckService({
+    asrEndpoint: "http://127.0.0.1:8787/transcribe",
+    llamaBackend: "ollama",
+    llamaBaseUrl: "http://127.0.0.1:11434",
+    fetchImpl: async () => { throw new Error("connection refused"); }
+  });
+
+  const result = await service.checkAll();
+  assert.equal(result.asr.ok, false);
+  assert.match(result.asr.error, /connection refused/);
+});
+
+addTest("HealthCheck: unconfigured endpoints report not configured", async () => {
+  const service = new HealthCheckService({
+    fetchImpl: async () => ({ ok: true })
+  });
+
+  const result = await service.checkAll();
+  assert.equal(result.asr.ok, false);
+  assert.match(result.asr.error, /not configured/);
+});
+
+// ── F7: Cancel recording ──
+
+addTest("Controller: cancel during recording returns to IDLE", async () => {
+  const toast = new ToastNotifier();
+  const widget = new WidgetOverlayService();
+  const tray = new TrayIconService();
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() {
+        return { audioPath: "/tmp/test.wav" };
+      }
+    },
+    asrClient: {
+      async transcribe() {
+        return { raw_text: "texto" };
+      }
+    },
+    llamaClient: {
+      async cleanText() {
+        return "Texto.";
+      }
+    },
+    pasteController: {
+      async pasteText() {
+        return { pasted: true, copied_to_clipboard: false };
+      }
+    },
+    widget,
+    tray,
+    toast,
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  const hotkey = new HotkeyService();
+  controller.registerHotkey(hotkey);
+
+  await hotkey.trigger();
+  assert.equal(controller.state, STATES.RECORDING);
+
+  const result = await controller.cancel();
+  assert.equal(result.cancelled, true);
+  assert.equal(controller.state, STATES.IDLE);
+  assert.equal(widget.visible, false);
+  assert.equal(tray.state, TRAY_STATES.NEUTRAL);
+});
+
+addTest("Controller: cancel outside recording is no-op", async () => {
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() {
+        return { audioPath: "/tmp/test.wav" };
+      }
+    },
+    asrClient: { async transcribe() { return { raw_text: "x" }; } },
+    llamaClient: { async cleanText() { return "X."; } },
+    pasteController: { async pasteText() { return { pasted: true, copied_to_clipboard: false }; } },
+    widget: new WidgetOverlayService(),
+    tray: new TrayIconService(),
+    toast: new ToastNotifier(),
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  const result = await controller.cancel();
+  assert.equal(result.ignored, true);
+});
+
+// ── F8: Beep service ──
+
+addTest("Beep service tracks event sequence", async () => {
+  const beep = new BeepService();
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() {
+        return { audioPath: "/tmp/test.wav" };
+      }
+    },
+    asrClient: { async transcribe() { return { raw_text: "hola" }; } },
+    llamaClient: { async cleanText() { return "Hola."; } },
+    pasteController: { async pasteText() { return { pasted: true, copied_to_clipboard: false }; } },
+    widget: new WidgetOverlayService(),
+    tray: new TrayIconService(),
+    toast: new ToastNotifier(),
+    settings: new SettingsStore(),
+    delay: immediateDelay,
+    beep
+  });
+
+  const hotkey = new HotkeyService();
+  controller.registerHotkey(hotkey);
+
+  await hotkey.trigger(); // start → beep start
+  await hotkey.trigger(); // stop → beep stop, then success
+
+  assert.equal(beep.events[0], "start");
+  assert.equal(beep.events[1], "stop");
+  assert.equal(beep.events[2], "success");
+});
+
+addTest("Beep service error on failure", async () => {
+  const beep = new BeepService();
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() {
+        return { audioPath: "/tmp/test.wav" };
+      }
+    },
+    asrClient: { async transcribe() { return { raw_text: "x" }; } },
+    llamaClient: { async cleanText() { throw new Error("llama offline"); } },
+    pasteController: { async pasteText() { return { pasted: true, copied_to_clipboard: false }; } },
+    widget: new WidgetOverlayService(),
+    tray: new TrayIconService(),
+    toast: new ToastNotifier(),
+    settings: new SettingsStore(),
+    delay: immediateDelay,
+    beep
+  });
+
+  const hotkey = new HotkeyService();
+  controller.registerHotkey(hotkey);
+
+  await hotkey.trigger();
+  await hotkey.trigger();
+
+  assert.equal(beep.events.includes("start"), true);
+  assert.equal(beep.events.includes("error"), true);
+  assert.equal(beep.events.includes("success"), false);
+});
+
+// ── F9: setMode changes mode ──
+
+addTest("Controller: setMode updates settings and fires toast", () => {
+  const toast = new ToastNotifier();
+  const tray = new TrayIconService();
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: { async startRecording() {}, async stopRecording() { return { audioPath: "" }; } },
+    asrClient: { async transcribe() { return { raw_text: "x" }; } },
+    llamaClient: { async cleanText() { return "X."; } },
+    pasteController: { async pasteText() { return { pasted: true, copied_to_clipboard: false }; } },
+    widget: new WidgetOverlayService(),
+    tray,
+    toast,
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  controller.setMode("Email");
+  assert.equal(controller.mode, "Email");
+  assert.equal(tray.mode, "Email");
+  assert.equal(toast.events.some((e) => /modo: email/i.test(e.message)), true);
+});
+
+// ── F10: Retry cleanup ──
+
+addTest("Controller: retry cleanup re-processes and pastes", async () => {
+  let cleanCount = 0;
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() { return { audioPath: "/tmp/test.wav" }; }
+    },
+    asrClient: { async transcribe() { return { raw_text: "crudo" }; } },
+    llamaClient: { async cleanText() { cleanCount++; return "Limpio."; } },
+    pasteController: { async pasteText() { return { pasted: true, copied_to_clipboard: false }; } },
+    widget: new WidgetOverlayService(),
+    tray: new TrayIconService(),
+    toast: new ToastNotifier(),
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  const hotkey = new HotkeyService();
+  controller.registerHotkey(hotkey);
+
+  await hotkey.trigger();
+  await hotkey.trigger();
+  assert.equal(cleanCount, 1);
+
+  const result = await controller.retryCleanup();
+  assert.equal(result.pasted, true);
+  assert.equal(cleanCount, 2);
+  assert.equal(controller.state, STATES.IDLE);
+});
+
+addTest("Controller: retry without prior dictation is no-op", async () => {
+  const toast = new ToastNotifier();
+  const controller = new FeatherTalkAppController({
+    audioRecorder: { async startRecording() {}, async stopRecording() { return { audioPath: "" }; } },
+    asrClient: { async transcribe() { return { raw_text: "x" }; } },
+    llamaClient: { async cleanText() { return "X."; } },
+    pasteController: { async pasteText() { return { pasted: true, copied_to_clipboard: false }; } },
+    widget: new WidgetOverlayService(),
+    tray: new TrayIconService(),
+    toast,
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  const result = await controller.retryCleanup();
+  assert.equal(result.ignored, true);
+});
+
+// ── F11: Preview flow ──
+
+addTest("Pipeline: preview paste action completes flow", async () => {
+  let pastedText = null;
+
+  const pipeline = new DictationPipeline({
+    asrClient: { async transcribe() { return { raw_text: "hola" }; } },
+    llamaClient: { async cleanText() { return "Hola."; } },
+    pasteController: { async pasteText(text) { pastedText = text; return { pasted: true, copied_to_clipboard: false }; } }
+  });
+
+  const result = await pipeline.processRecording({
+    audioPath: "C:/tmp/test.wav",
+    onPreview: (text) => ({ action: "paste", text })
+  });
+
+  assert.equal(result.finalText, "Hola.");
+  assert.equal(pastedText, "Hola.");
+  assert.equal(result.paste.pasted, true);
+});
+
+addTest("Pipeline: preview cancel action skips paste", async () => {
+  let pasteCount = 0;
+
+  const pipeline = new DictationPipeline({
+    asrClient: { async transcribe() { return { raw_text: "hola" }; } },
+    llamaClient: { async cleanText() { return "Hola."; } },
+    pasteController: { async pasteText() { pasteCount++; return { pasted: true, copied_to_clipboard: false }; } }
+  });
+
+  const result = await pipeline.processRecording({
+    audioPath: "C:/tmp/test.wav",
+    onPreview: () => ({ action: "cancel", text: "" })
+  });
+
+  assert.equal(result.paste.cancelled, true);
+  assert.equal(result.paste.pasted, false);
+  assert.equal(pasteCount, 0);
+});
+
+// ── F12: History service ──
+
+addTest("HistoryService: add and retrieve entries", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "feathertalk-history-"));
+  const filePath = path.join(dir, "history.jsonl");
+  const service = new HistoryService({ filePath, retentionDays: 7 });
+
+  try {
+    await service.addEntry({
+      rawText: "hola",
+      finalText: "Hola.",
+      mode: "Default",
+      elapsedMs: 1000,
+      asrSource: "test",
+      timestamp: "2026-03-15T10:00:00.000Z"
+    });
+
+    const entries = await service.getEntries();
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].finalText, "Hola.");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+addTest("HistoryService: clear removes all entries", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "feathertalk-history-"));
+  const filePath = path.join(dir, "history.jsonl");
+  const service = new HistoryService({ filePath, retentionDays: 7 });
+
+  try {
+    await service.addEntry({
+      rawText: "test",
+      finalText: "Test.",
+      mode: "Default",
+      elapsedMs: 1000,
+      asrSource: "test"
+    });
+
+    await service.clear();
+    const entries = await service.getEntries();
+    assert.equal(entries.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── FSM: New transitions (F7, F10, F11) ──
+
+addTest("FSM: RECORDING can transition to IDLE (cancel)", () => {
+  const fsm = new FeatherTalkStateMachine();
+  fsm.transition(STATES.RECORDING);
+  fsm.transition(STATES.IDLE);
+  assert.equal(fsm.state, STATES.IDLE);
+});
+
+addTest("FSM: IDLE can transition to PROCESSING_LLAMA (retry)", () => {
+  const fsm = new FeatherTalkStateMachine();
+  fsm.transition(STATES.PROCESSING_LLAMA);
+  assert.equal(fsm.state, STATES.PROCESSING_LLAMA);
+});
+
+addTest("FSM: PROCESSING_LLAMA can transition to PREVIEWING", () => {
+  const fsm = new FeatherTalkStateMachine();
+  fsm.transition(STATES.RECORDING);
+  fsm.transition(STATES.PROCESSING_ASR);
+  fsm.transition(STATES.PROCESSING_LLAMA);
+  fsm.transition(STATES.PREVIEWING);
+  assert.equal(fsm.state, STATES.PREVIEWING);
+});
+
+addTest("FSM: PREVIEWING can transition to PASTING or IDLE", () => {
+  const fsm1 = new FeatherTalkStateMachine();
+  fsm1.transition(STATES.RECORDING);
+  fsm1.transition(STATES.PROCESSING_ASR);
+  fsm1.transition(STATES.PROCESSING_LLAMA);
+  fsm1.transition(STATES.PREVIEWING);
+  fsm1.transition(STATES.PASTING);
+  assert.equal(fsm1.state, STATES.PASTING);
+
+  const fsm2 = new FeatherTalkStateMachine();
+  fsm2.transition(STATES.RECORDING);
+  fsm2.transition(STATES.PROCESSING_ASR);
+  fsm2.transition(STATES.PROCESSING_LLAMA);
+  fsm2.transition(STATES.PREVIEWING);
+  fsm2.transition(STATES.IDLE);
+  assert.equal(fsm2.state, STATES.IDLE);
+});
+
+// ── Feature: Multi-level undo stack ──
+
+addTest("Controller: multi-level undo pops stack", async () => {
+  let pasteCount = 0;
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() { return { audioPath: "/tmp/test.wav" }; }
+    },
+    asrClient: { async transcribe() { return { raw_text: "first" }; } },
+    llamaClient: { async cleanText({ rawText }) { return rawText.charAt(0).toUpperCase() + rawText.slice(1) + "."; } },
+    pasteController: {
+      async pasteText() { pasteCount++; return { pasted: true, copied_to_clipboard: false }; },
+      setClipboard() {}
+    },
+    widget: new WidgetOverlayService(),
+    tray: new TrayIconService(),
+    toast: new ToastNotifier(),
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  const hotkey = new HotkeyService();
+  controller.registerHotkey(hotkey);
+
+  // First dictation
+  await hotkey.trigger();
+  await hotkey.trigger();
+
+  // Second dictation
+  await hotkey.trigger();
+  await hotkey.trigger();
+
+  assert.equal(pasteCount, 2);
+
+  // First undo
+  const undo1 = await controller.undoPaste();
+  assert.equal(undo1.undone, true);
+  assert.equal(undo1.remaining, 0);
+
+  // Second undo (stack empty now)
+  const undo2 = await controller.undoPaste();
+  assert.equal(undo2.ignored, true);
+});
+
+// ── Feature: Stage forwarding to widget ──
+
+addTest("Controller: pipeline stages forwarded to widget", async () => {
+  const widget = new WidgetOverlayService();
+
+  const controller = new FeatherTalkAppController({
+    audioRecorder: {
+      async startRecording() {},
+      async stopRecording() { return { audioPath: "/tmp/test.wav" }; }
+    },
+    asrClient: { async transcribe() { return { raw_text: "hola" }; } },
+    llamaClient: { async cleanText() { return "Hola."; } },
+    pasteController: { async pasteText() { return { pasted: true, copied_to_clipboard: false }; } },
+    widget,
+    tray: new TrayIconService(),
+    toast: new ToastNotifier(),
+    settings: new SettingsStore(),
+    delay: immediateDelay
+  });
+
+  const hotkey = new HotkeyService();
+  controller.registerHotkey(hotkey);
+
+  await hotkey.trigger();
+  await hotkey.trigger();
+
+  const stageEvents = widget.events.filter(e => e.type === "stage");
+  assert.ok(stageEvents.length >= 2, "Should have stage events for asr and llama");
+  assert.equal(stageEvents[0].value, "asr");
+  assert.equal(stageEvents[1].value, "llama");
+});
+
+// ── Feature: Health polling ──
+
+addTest("HealthCheck: polling calls onChange when status changes", async () => {
+  let pollCount = 0;
+  let changeCount = 0;
+
+  const service = new HealthCheckService({
+    asrEndpoint: "http://127.0.0.1:8787/transcribe",
+    llamaBackend: "ollama",
+    llamaBaseUrl: "http://127.0.0.1:11434",
+    fetchImpl: async () => {
+      pollCount++;
+      return { ok: pollCount > 1, status: pollCount > 1 ? 200 : 500 };
+    }
+  });
+
+  await new Promise((resolve) => {
+    service.startPolling(50, (result) => {
+      changeCount++;
+      if (changeCount >= 2) {
+        service.stopPolling();
+        resolve();
+      }
+    });
+  });
+
+  assert.ok(changeCount >= 2);
+  service.stopPolling();
+});
+
+// ── Feature: Custom modes ──
+
+addTest("buildCleanupPrompt uses custom modes when provided", async () => {
+  const { buildCleanupPrompt } = await import("../src/modes/prompts.js");
+  const custom = { Medical: "Limpia terminologia medica. Text:\n{raw_text}" };
+  const result = buildCleanupPrompt("Medical", "el paciente tiene fiebre", custom);
+  assert.match(result, /terminologia medica/);
+  assert.match(result, /el paciente tiene fiebre/);
+});
+
+addTest("getAllModes includes built-in and custom modes", async () => {
+  const { getAllModes } = await import("../src/modes/prompts.js");
+  const modes = getAllModes({ Medical: "...", Legal: "..." });
+  assert.ok(modes.includes("Default"));
+  assert.ok(modes.includes("Email"));
+  assert.ok(modes.includes("Medical"));
+  assert.ok(modes.includes("Legal"));
+});
+
+// ── Feature: History export and stats ──
+
+addTest("HistoryService: getStats aggregates entries", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "feathertalk-history-"));
+  const filePath = path.join(dir, "history.jsonl");
+  const service = new HistoryService({ filePath, retentionDays: 7 });
+
+  try {
+    await service.addEntry({ rawText: "a", finalText: "A.", mode: "Default", elapsedMs: 1000, asrSource: "test" });
+    await service.addEntry({ rawText: "b", finalText: "B.", mode: "Email", elapsedMs: 2000, asrSource: "test" });
+    await service.addEntry({ rawText: "c", finalText: "C.", mode: "Default", elapsedMs: 1500, asrSource: "test" });
+
+    const stats = await service.getStats();
+    assert.equal(stats.total, 3);
+    assert.equal(stats.modes.Default, 2);
+    assert.equal(stats.modes.Email, 1);
+    assert.equal(stats.mostUsedMode, "Default");
+    assert.equal(stats.avgElapsedMs, 1500);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+addTest("HistoryService: exportEntries formats CSV correctly", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "feathertalk-history-"));
+  const filePath = path.join(dir, "history.jsonl");
+  const service = new HistoryService({ filePath, retentionDays: 7 });
+
+  try {
+    await service.addEntry({ rawText: "hola", finalText: "Hola.", mode: "Default", elapsedMs: 1000, asrSource: "test", timestamp: "2026-03-16T10:00:00.000Z" });
+
+    const csv = await service.exportEntries("csv");
+    assert.match(csv, /timestamp,mode,rawText,finalText,elapsedMs,asrSource/);
+    assert.match(csv, /"2026-03-16/);
+    assert.match(csv, /"Default"/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 let passed = 0;

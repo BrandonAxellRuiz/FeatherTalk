@@ -149,9 +149,13 @@ function scoreLanguageSignals(text) {
 function shouldProbeSpanishFromAuto(autoText) {
   const signals = scoreLanguageSignals(autoText);
 
-  // Probe Spanish broadly in auto mode unless the auto transcript already
-  // has clear Spanish evidence. This avoids English-biased auto outputs.
-  if (signals.spanish >= 2) {
+  // Only skip the Spanish probe when the auto transcript has a strong and
+  // unambiguous Spanish signal. A count of 2 is too easy to accumulate from
+  // words like "no" or "como" that appear in English-biased ASR output of
+  // Spanish speech. Require at least 3 Spanish signals (e.g. accented chars
+  // which add +2, plus one stopword) AND that Spanish clearly dominates
+  // English signals before concluding the auto result is already Spanish.
+  if (signals.spanish >= 3 && signals.spanish > signals.english) {
     return false;
   }
 

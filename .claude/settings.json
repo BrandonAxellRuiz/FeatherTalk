@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "zapier@claude-plugins-official": true
+  }
+}

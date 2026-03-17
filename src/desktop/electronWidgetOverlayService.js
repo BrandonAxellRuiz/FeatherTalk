@@ -11,9 +11,12 @@ export class ElectronWidgetOverlayService {
   #state = WIDGET_STATES.HIDDEN;
   #visible = false;
   #ready;
+  #customPosition = null;
+  #ipcMain;
 
-  constructor({ BrowserWindow, screen }) {
+  constructor({ BrowserWindow, screen, ipcMain: ipc, onPositionChanged }) {
     this.#screen = screen;
+    this.#ipcMain = ipc;
     this.#window = new BrowserWindow({
       width: WIDGET_WIDTH,
       height: WIDGET_HEIGHT,
@@ -38,6 +41,21 @@ export class ElectronWidgetOverlayService {
     this.#ready = this.#window.loadURL(
       `data:text/html;charset=UTF-8,${encodeURIComponent(WIDGET_HTML_INK_V2)}`
     );
+
+    if (this.#ipcMain) {
+      this.#ipcMain.on("widget:drag-move", (_event, { dx, dy }) => {
+        if (this.#window.isDestroyed()) return;
+        const [cx, cy] = this.#window.getPosition();
+        this.#window.setPosition(cx + dx, cy + dy, false);
+      });
+
+      this.#ipcMain.on("widget:drag-end", () => {
+        if (this.#window.isDestroyed()) return;
+        const [x, y] = this.#window.getPosition();
+        this.#customPosition = { x, y };
+        onPositionChanged?.({ x, y });
+      });
+    }
   }
 
   async #emit(payload) {
@@ -59,9 +77,28 @@ export class ElectronWidgetOverlayService {
     this.#window.setPosition(x, y, false);
   }
 
+  setPosition(x, y) {
+    this.#customPosition = { x, y };
+    if (!this.#window.isDestroyed()) {
+      this.#window.setPosition(Math.round(x), Math.round(y), false);
+    }
+  }
+
+  set_position(x, y) {
+    this.setPosition(x, y);
+  }
+
   showWidget() {
     this.#visible = true;
-    this.#positionTopCenter();
+    if (this.#customPosition) {
+      this.#window.setPosition(
+        Math.round(this.#customPosition.x),
+        Math.round(this.#customPosition.y),
+        false
+      );
+    } else {
+      this.#positionTopCenter();
+    }
     this.#window.showInactive();
     this.#emit({ type: "show" }).catch(() => {});
   }
@@ -87,6 +124,22 @@ export class ElectronWidgetOverlayService {
     this.updateLevel(level);
   }
 
+  setMode(mode) {
+    this.#emit({ type: "mode", value: mode }).catch(() => {});
+  }
+
+  set_mode(mode) {
+    this.setMode(mode);
+  }
+
+  setStage(stage) {
+    this.#emit({ type: "stage", value: stage }).catch(() => {});
+  }
+
+  setHotkey(hotkey) {
+    this.#emit({ type: "hotkey", value: hotkey }).catch(() => {});
+  }
+
   hideWidget() {
     this.#visible = false;
     this.#state = WIDGET_STATES.HIDDEN;
@@ -101,6 +154,10 @@ export class ElectronWidgetOverlayService {
 
   hide_widget() {
     this.hideWidget();
+  }
+
+  emitEvent(payload) {
+    this.#emit(payload).catch(() => {});
   }
 
   destroy() {
